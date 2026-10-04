@@ -150,40 +150,37 @@ class _TriageScreenState extends State<TriageScreen> {
     );
   }
 
-  void _onSwipe(
+  FutureOr<bool> _onSwipe(
     int previousIndex,
     int? currentIndex,
     CardSwiperDirection direction,
   ) {
     final repo = context.read<TaskRepository>();
     final tasks = repo.stack;
-    if (previousIndex < 0 || previousIndex >= tasks.length) return;
+    if (previousIndex < 0 || previousIndex >= tasks.length) return false;
     final task = tasks[previousIndex];
-    switch (direction) {
-      case CardSwiperDirection.right:
-        final binding = task.onSwipeRight;
-        _triage(
-          task,
-          actionName: binding?.actionName ?? 'approve',
-          data: binding?.payload,
-          source: ActionSource.swipeGesture,
-        );
-        break;
-      case CardSwiperDirection.left:
-        final binding = task.onSwipeLeft;
-        _triage(
-          task,
-          actionName: binding?.actionName ?? 'reject',
-          data: binding?.payload,
-          source: ActionSource.swipeGesture,
-        );
-        break;
-      case CardSwiperDirection.down:
-        repo.snooze(task.taskId);
-        break;
-      default:
-        break;
+    if (direction == CardSwiperDirection.right) {
+      final binding = task.onSwipeRight;
+      _triage(
+        task,
+        actionName: binding?.actionName ?? 'approve',
+        data: binding?.payload,
+        source: ActionSource.swipeGesture,
+      );
+    } else if (direction == CardSwiperDirection.left) {
+      final binding = task.onSwipeLeft;
+      _triage(
+        task,
+        actionName: binding?.actionName ?? 'reject',
+        data: binding?.payload,
+        source: ActionSource.swipeGesture,
+      );
+    } else if (direction == CardSwiperDirection.bottom) {
+      repo.snooze(task.taskId);
+    } else {
+      return false;
     }
+    return true;
   }
 }
 

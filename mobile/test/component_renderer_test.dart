@@ -23,6 +23,33 @@ void main() {
     expect(find.text('AFTER'), findsOneWidget);
   });
 
+  testWidgets('DiffBox renders rows and inline unified diff', (tester) async {
+    await tester.pumpWidget(_wrap(
+      const ComponentRenderer(
+        component: CardComponent(
+          id: 'd2',
+          component: 'DiffBox',
+          properties: {
+            'title': '金額',
+            'before': '120',
+            'after': '240',
+            'rows': [
+              {'label': '対象', 'before': 'UserA', 'after': 'UserB'},
+            ],
+            'inline': ' context\n-old line\n+new line',
+          },
+        ),
+      ),
+    ));
+    expect(find.text('120'), findsOneWidget);
+    expect(find.text('240'), findsOneWidget);
+    expect(find.text('対象'), findsOneWidget);
+    expect(find.text('UserA'), findsOneWidget);
+    expect(find.text('UserB'), findsOneWidget);
+    expect(find.text('+new line'), findsOneWidget);
+    expect(find.text('-old line'), findsOneWidget);
+  });
+
   testWidgets('unknown component falls back to a text card (FR-1.3)',
       (tester) async {
     await tester.pumpWidget(_wrap(

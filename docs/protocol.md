@@ -107,8 +107,12 @@ Field notes:
 
 Card surface: `TriageCard` (root shell), `Text` (`variant`: `caption` |
 `body` | `title`; `source: "external"` renders the quote-block style
-required by NFR-2.2), `DiffBox` (`before` red / `after` green,
-`highlight`: `info` | `warning` | `critical`), `Chips`
+required by NFR-2.2), `DiffBox` (`title`, `before` red / `after` green,
+`highlight`: `info` | `warning` | `critical`; optional `rows` — list of
+`{label?, before?, after?}` multi-row changes rendered after the main
+pair; optional `inline` — unified-diff style string with `+`/`-`/space
+line prefixes, clients color added green / removed red / context dim,
+rendered as plain text never markup), `Chips`
 (`options[].label`, optional `actionName`+`payload` — tap sends that
 action with `source: "quick_chip"`, options without `actionName` open
 the inspect sheet).

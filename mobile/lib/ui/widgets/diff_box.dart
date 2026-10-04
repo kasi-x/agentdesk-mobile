@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 
 /// DiffBox catalog component — before/after with red/green highlight,
 /// graspable in 0.5s (spec §3.2). `properties`: title, before, after,
-/// highlight (info | warning | critical).
+/// highlight (info | warning | critical), optional `rows` (list of
+/// `{label?, before?, after?}` rendered after the main pair), optional
+/// `inline` (unified-diff style text with `+`/`-`/space prefixes — plain
+/// text lines, colored, never markup). Everything renders as text (NFR-2.1).
 class DiffBox extends StatelessWidget {
   final Map<String, dynamic> properties;
 
@@ -17,6 +20,26 @@ class DiffBox extends StatelessWidget {
       default:
         return const Color(0xFF5B8DEF);
     }
+  }
+
+  List<Map<String, String>> get _rows {
+    final raw = properties['rows'];
+    if (raw is! List) return const [];
+    return [
+      for (final r in raw)
+        if (r is Map)
+          {
+            if (r['label'] != null) 'label': '${r['label']}',
+            'before': '${r['before'] ?? ''}',
+            'after': '${r['after'] ?? ''}',
+          },
+    ];
+  }
+
+  String? get _inline {
+    final raw = properties['inline'];
+    if (raw is! String || raw.isEmpty) return null;
+    return raw;
   }
 
   @override
@@ -44,25 +67,106 @@ class DiffBox extends StatelessWidget {
                   ?.copyWith(color: Colors.white70),
             ),
           if (title != null && title.isNotEmpty) const SizedBox(height: 6),
-          Row(
-            children: [
-              Expanded(
-                child: _Side(
-                    label: 'BEFORE',
-                    text: before,
-                    color: const Color(0xFFFF7A7A)),
-              ),
-              const SizedBox(width: 8),
-              const Icon(Icons.arrow_forward, size: 16, color: Colors.white38),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _Side(
-                    label: 'AFTER',
-                    text: after,
-                    color: const Color(0xFF7BE494)),
-              ),
-            ],
+          _Pair(before: before, after: after),
+          for (final row in _rows) ...[
+            const SizedBox(height: 8),
+            _Pair(
+              before: row['before'] ?? '',
+              after: row['after'] ?? '',
+              label: row['label'],
+            ),
+          ],
+          if (_inline != null) ...[
+            const SizedBox(height: 8),
+            _Inline(text: _inline!),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _Pair extends StatelessWidget {
+  final String before;
+  final String after;
+  final String? label;
+
+  const _Pair({required this.before, required this.after, this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (label != null && label!.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text(
+              label!,
+              style: Theme.of(context)
+                  .textTheme
+                  .labelSmall
+                  ?.copyWith(color: Colors.white70),
+            ),
           ),
+        Row(
+          children: [
+            Expanded(
+              child: _Side(
+                  label: 'BEFORE',
+                  text: before,
+                  color: const Color(0xFFFF7A7A)),
+            ),
+            const SizedBox(width: 8),
+            const Icon(Icons.arrow_forward, size: 16, color: Colors.white38),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _Side(
+                  label: 'AFTER',
+                  text: after,
+                  color: const Color(0xFF7BE494)),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// Unified-diff style block: `+` lines green, `-` lines red, everything
+/// else dim. Pure text rows — no markup parsing (NFR-2.1).
+class _Inline extends StatelessWidget {
+  final String text;
+
+  const _Inline({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.3),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final line in text.split('\n'))
+            Text(
+              line.isEmpty ? ' ' : line,
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontFamilyFallback: const ['Menlo', 'monospace'],
+                fontSize: 12,
+                height: 1.5,
+                color: line.startsWith('+')
+                    ? const Color(0xFF7BE494)
+                    : line.startsWith('-')
+                        ? const Color(0xFFFF7A7A)
+                        : Colors.white54,
+              ),
+            ),
         ],
       ),
     );

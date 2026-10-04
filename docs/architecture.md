@@ -10,14 +10,13 @@
    (agent callback)  (triage reply) │  GET  /stream   → SSE fan-out     │
                                     │  POST /actions  → nonce CAS lock  │
         ┌──────────────┐            │  GET  /state    → snapshot        │
-        │ Web UI (P3)   │◄──SSE──────┤                                   │
-        └──────────────┘            │  TaskHub Durable Object (single,  │
-        ┌──────────────┐   SSE      │  "global"): task store (DO SQL    │
-        │ Mobile Flutter│◄──────────┤  KV), sessions map, sweep alarm   │
-        │ card stack    │──────────►│                                   │
+        │ Web UI (P2)   │◄──SSE──────┤  (same Worker, `web/` assets)    │
+        └──────────────┘            │                                   │
+        ┌──────────────┐   SSE      │  TaskHub Durable Object (single,  │
+        │ Mobile Flutter│◄──────────┤  "global"): task store (DO SQL    │
+        │ card stack    │──────────►│  KV), sessions map, sweep alarm   │
         └──────────────┘  POST      └───────────────────────────────────┘
                           /actions
-```
 
 ## Why a single Durable Object
 
@@ -86,12 +85,21 @@ by parsed data — no WebView/eval anywhere (NFR-2.1).
   `properties.source = "external"` and renders in the quote-block style
   (NFR-2.2). Agents must never embed credentials in payloads.
 
-## Known MVP deviations (tracked for Phase 2/3)
+## Phase 2 status (done)
+
+- Web triage UI: `web/` (zero-build static assets on the same Worker) —
+  SSE + snapshot, optimistic triage, offline queue, inspect sheet.
+- Inspect sheet: genui (`package:genui` A2UI engine, `mobile/lib/ui/genui_form.dart`)
+  renders the 5 form types; the hand-rolled catalog stays as per-component
+  fallback (FR-1.3). DiffBox gains `rows` + `inline` (§protocol catalog v0).
+- Same-origin browser POST fix: the Worker rebuilds the DO subresponse
+  before `cors()` header mutation (`backend/src/index.ts`) — immutable
+  subresponse headers surfaced browser POSTs as 500.
+
+## Known MVP deviations (tracked for Phase 3)
 
 - Inspect is tap-only; up-swipe is reserved because flutter_card_swiper
   cannot cancel a committed swipe.
 - Snooze is client-local (moves to stack tail); timed re-notification
   is not implemented.
 - No APNs/FCM push yet; no Live Activities yet (Phase 3).
-- The inspect-sheet catalog is a hand-rolled v0 subset; Phase 2 swaps
-  in Google `genui` behind the same renderer interface.

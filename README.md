@@ -46,5 +46,6 @@ pub get && flutter run` and point Settings at the hub
 
 Phase 1 MVP implemented (card stack, webhook→DO→SSE pipeline, optimistic
 UI + offline queue, nonce/optimistic-lock, agent callback delivery).
-Phase 2: genui (A2UI) forms, web UI. Phase 3: Live Activities /
-Dynamic Island, push. See AGENTS.md for the full checklist.
+Phase 2 done: genui (A2UI) inspect forms, richer Diff (`rows` + `inline`),
+Web triage UI served from the Worker (`/`), same-origin POST fix.
+Phase 3: Live Activities / Dynamic Island, push. See AGENTS.md checklist.

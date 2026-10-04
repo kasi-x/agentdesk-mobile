@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AgentDesk Triage</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header id="topbar">
+    <div class="brand">
+      <span class="brand-name">AgentDesk</span>
+      <span id="status-dot" class="dot" title="接続状態"></span>
+    </div>
+    <span id="pending-count" class="count" hidden></span>
+    <button id="settings-toggle" class="btn ghost sm" type="button">⚙ 設定</button>
+  </header>
+
+  <section id="settings" class="settings" hidden>
+    <label class="field">
+      <span>Hub URL</span>
+      <input id="hub-input" type="url" placeholder="https://hub.example.com" />
+    </label>
+    <label class="field">
+      <span>Client token</span>
+      <input id="token-input" type="password" autocomplete="off" placeholder="dev-client-token" />
+    </label>
+    <div class="settings-actions">
+      <button id="save-settings" class="btn primary" type="button">接続</button>
+    </div>
+  </section>
+
+  <main id="stack"></main>
+
+  <div id="inspect-sheet" class="sheet" hidden></div>
+  <div id="toasts" class="toasts"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

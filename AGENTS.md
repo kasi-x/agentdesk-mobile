@@ -69,8 +69,8 @@ client token, persisted with shared_preferences; dev defaults match
 ## Directory layout
 
 ```
-backend/              Cloudflare Worker: webhook + SSE + action endpoints
-  src/index.ts        router, bearer auth, CORS
+backend/              Cloudflare Worker: webhook + SSE + action endpoints + web assets
+  src/index.ts        router, bearer auth, CORS, static-asset fallback
   src/task-hub.ts     Durable Object: task store, SSE sessions, nonce lock
   src/protocol.ts     wire types, validation, pure CAS decision (unit-tested)
   src/protocol.test.ts
@@ -78,9 +78,10 @@ mobile/               Flutter app (card stack UI, SSE, offline queue)
   lib/models/         tolerant JSON parsing of the card payload
   lib/services/       HubApi, SseClient, TaskRepository (state + queue)
   lib/ui/             triage stack, card view, component catalog, inspect sheet
+  lib/ui/genui_form.dart  genui A2UI adapter for inspect-form rendering
+web/                  zero-build browser triage UI (served as Worker assets)
 tools/                mock-agent.mjs (send / listen) for local E2E
 docs/                 requirements (JA), protocol spec, architecture
-```
 
 ## Constraints
 
@@ -110,10 +111,13 @@ docs/                 requirements (JA), protocol spec, architecture
       down=snooze, tap=inspect sheet), webhook → DO → SSE pipeline,
       optimistic UI, offline queue, nonce + optimistic lock (409 on
       double submit), remote dismiss broadcast, agent callback delivery.
-- [ ] Phase 2: Google genui (A2UI SDK) integration for the inspect
-      sheet, richer Diff component, Web triage UI.
+- [x] Phase 2: genui (`GenUiFormAdapter`, per-component hand-rolled
+      fallback) for the inspect sheet, richer Diff (`rows` + `inline`,
+      mobile + web), Web triage UI (`web/` static assets on the Worker),
+      same-origin browser POST fix (rebuild DO subresponse before cors).
 - [ ] Phase 3: iOS Live Activities / Dynamic Island (WidgetKit via
-      MethodChannel), multi-device real-time sync polish.
+      MethodChannel — Swift evaluated, deferred until a macOS/Xcode host
+      exists), multi-device real-time sync polish, push (APNs/FCM).
 
 Known MVP deviations from the spec (see docs/architecture.md):
 inspect is tap-only (up-swipe reserved so the card does not fly away);

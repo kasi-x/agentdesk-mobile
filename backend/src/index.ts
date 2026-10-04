@@ -51,7 +51,7 @@ export default {
             env,
           );
         }
-        const res = await env.TASK_HUB.getByName("global").fetch(
+        const doRes = await env.TASK_HUB.getByName("global").fetch(
           "https://task-hub/action",
           {
             method: "POST",
@@ -59,6 +59,12 @@ export default {
             headers: { "content-type": "application/json" },
           },
         );
+        // Rebuild so cors() header mutation never touches an immutable
+        // subresponse (same-origin browser POSTs surface this as a 500).
+        const res = new Response(await doRes.text(), {
+          status: doRes.status,
+          headers: { "content-type": "application/json" },
+        });
         return cors(res, request, env);
       }
 
@@ -75,6 +81,12 @@ export default {
         const res = await env.TASK_HUB.getByName("global").fetch(
           "https://task-hub/state",
         );
+        return cors(res, request, env);
+      }
+
+      // Static assets (web UI) — no auth; the token is entered client-side.
+      if (request.method === "GET") {
+        const res = await env.ASSETS.fetch(request);
         return cors(res, request, env);
       }
 

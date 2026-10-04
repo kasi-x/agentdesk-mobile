@@ -9,6 +9,7 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-09-15",
   "observability": { "enabled": true },
+  "assets": { "directory": "../web", "binding": "ASSETS" },
   "durable_objects": {
     "bindings": [{ "name": "TASK_HUB", "class_name": "TaskHub" }]
   },

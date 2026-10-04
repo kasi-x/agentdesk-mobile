@@ -1,5 +1,7 @@
 export interface Env {
   TASK_HUB: DurableObjectNamespace;
+  /** Static assets served from ../web (Phase 2 web triage UI). */
+  ASSETS: Fetcher;
   /** Agents → hub. Secret. */
   AGENT_TOKEN?: string;
   /** Clients (mobile / web) → hub. Secret. */

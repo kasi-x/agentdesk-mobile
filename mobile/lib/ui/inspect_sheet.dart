@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:genui/genui.dart' show Surface;
 
 import '../models/task_card.dart';
+import 'genui_form.dart';
 import 'widgets/component_renderer.dart';
 
 /// Inspect & Modify (spec §3.3): bottom sheet with the card body plus a
@@ -38,9 +40,18 @@ class _InspectSheetState extends State<_InspectSheet> {
   final Map<String, dynamic> _values = <String, dynamic>{};
   final Map<String, TextEditingController> _textControllers =
       <String, TextEditingController>{};
+  late final GenUiFormAdapter _genui;
+
+  @override
+  void initState() {
+    super.initState();
+    _genui = GenUiFormAdapter();
+    _genui.buildForm(widget.task.inspectForm);
+  }
 
   @override
   void dispose() {
+    _genui.dispose();
     for (final controller in _textControllers.values) {
       controller.dispose();
     }
@@ -62,6 +73,9 @@ class _InspectSheetState extends State<_InspectSheet> {
         if (text.isNotEmpty) _values[c.id] = text;
       }
     }
+    // genui-rendered fields contribute their data-model values; hand-rolled
+    // state is already in `_values`. Form values win over the payload.
+    _values.addAll(_genui.collectValues());
     final base = widget.task.onSwipeRight?.payload ?? const <String, dynamic>{};
     final data = <String, dynamic>{...base, ..._values};
     Navigator.of(context).pop();
@@ -121,7 +135,7 @@ class _InspectSheetState extends State<_InspectSheet> {
                     for (final component in task.inspectForm)
                       Padding(
                         padding: const EdgeInsets.only(top: 12),
-                        child: _formComponent(component),
+                        child: _formSlot(component),
                       ),
                   ],
                   const SizedBox(height: 20),
@@ -148,6 +162,16 @@ class _InspectSheetState extends State<_InspectSheet> {
 
   // ---------------------------------------------------------------
   // Form catalog v0 (docs/protocol.md)
+
+  /// Renders a form component through genui when possible; anything the
+  /// adapter does not handle (unknown types, malformed properties, failed
+  /// surfaces) falls back to the hand-rolled widget below (FR-1.3).
+  Widget _formSlot(CardComponent c) {
+    if (_genui.handles(c) && !_genui.failedIds.contains(c.id)) {
+      return Surface(surfaceContext: _genui.contextFor(c.id));
+    }
+    return _formComponent(c);
+  }
 
   Widget _formComponent(CardComponent c) {
     switch (c.component) {

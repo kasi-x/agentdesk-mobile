@@ -9,11 +9,12 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  a2ui_core: ^0.1.0
   flutter_card_swiper: ^7.0.1
+  genui: ^0.10.4
   http: ^1.2.2
   provider: ^6.1.2
   shared_preferences: ^2.3.3
-
 dev_dependencies:
   flutter_test:
     sdk: flutter
