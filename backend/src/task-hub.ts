@@ -47,15 +47,27 @@ export class TaskHub {
   }
 
   /** SSE: snapshot first (reconnect resync), then live events. */
-  private async connect(): Promise<Response> {
+  private connect(): Response {
     const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
     const writer = writable.getWriter();
-    const snapshot = await this.pending();
-    await writer.write(
-      encodeSSE("snapshot", { tasks: snapshot.map((t) => t.task) }),
+    const id = crypto.randomUUID();
+    this.sessions.set(id, writer);
+    // Write only after the Response is returned — awaiting a
+    // TransformStream write before the runtime starts reading the body
+    // deadlocks (the first snapshot would never flush).
+    this.state.waitUntil(
+      (async () => {
+        try {
+          const snapshot = await this.pending();
+          await writer.write(
+            encodeSSE("snapshot", { tasks: snapshot.map((t) => t.task) }),
+          );
+        } catch {
+          this.sessions.delete(id);
+        }
+        void this.pumpHeartbeat();
+      })(),
     );
-    this.sessions.set(crypto.randomUUID(), writer);
-    void this.pumpHeartbeat();
     return new Response(readable, { headers: sseHeaders() });
   }
 
