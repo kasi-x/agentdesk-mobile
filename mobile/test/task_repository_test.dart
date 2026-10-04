@@ -21,6 +21,9 @@ class FakeHubApi implements HubApi {
     sent.add(reply);
     return ActionSendResult.sent;
   }
+
+  @override
+  Future<UndoResult> sendUndo(String taskId) async => UndoResult.undone;
 }
 
 TaskCard _task(String id, {String? createdAt}) => TaskCard.fromJson(
@@ -124,5 +127,26 @@ void main() {
     repo.remove('r1', remote: true);
     expect(repo.pendingCount, 0);
     expect(repo.lastToast, contains('別のデバイスで処理されました'));
+  });
+
+  test('triage opens an undo window; undoLast calls the hub (I-104)',
+      () async {
+    final api = FakeHubApi();
+    final repo = _repo(api);
+    await repo.restoreQueue();
+    final task = _task('u1');
+    repo.upsert(task);
+    await repo.triage(task,
+        actionName: 'approve', source: ActionSource.swipeGesture);
+    expect(repo.lastUndoneTaskId, 'u1');
+    await repo.undoLast();
+    expect(repo.lastUndoneTaskId, isNull);
+    expect(repo.lastToast, '元に戻しました');
+  });
+
+  test('undoLast with no window is a no-op', () async {
+    final repo = _repo(FakeHubApi());
+    await repo.undoLast();
+    expect(repo.lastToast, isNull);
   });
 }

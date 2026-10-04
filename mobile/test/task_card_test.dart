@@ -59,6 +59,8 @@ void main() {
     expect(task.onSwipeRight?.actionName, 'approve');
     expect(task.onSwipeRight?.payload['newTime'], '2026-10-05 16:30');
     expect(task.inspectForm.single.component, 'TimePicker');
+    expect(task.impact.isEmpty, isTrue);
+    expect(riskLevel(task), RiskLevel.low);
   });
 
   test('survives schema breakage: unknown component, missing fields (FR-1.3)', () {
@@ -93,5 +95,69 @@ void main() {
     expect(restored.nonce, task.nonce);
     expect(restored.onSwipeRight?.actionName, 'approve');
     expect(restored.inspectForm.single.id, 'time_picker');
+  });
+
+  test('parses impact and swipe labels (I-202, I-130)', () {
+    final task = TaskCard.fromJson(<String, dynamic>{
+      ...reference,
+      'impact': {
+        'summary': 'UserA に返金します',
+        'reversible': false,
+        'cost': {'amount': 120, 'currency': 'USD'},
+        'scope': 'Stripe',
+      },
+      'actions': {
+        'onSwipeRight': {'actionName': 'approve', 'label': '返金する \$120'},
+      },
+    });
+    expect(task.impact.summary, 'UserA に返金します');
+    expect(task.impact.reversible, isFalse);
+    expect(task.impact.amount, 120);
+    expect(task.impact.currency, 'USD');
+    expect(task.impact.scope, 'Stripe');
+    expect(task.impact.isEmpty, isFalse);
+    expect(task.onSwipeRight?.label, '返金する \$120');
+    final restored = TaskCard.fromJson(task.toJson());
+    expect(restored.impact.summary, 'UserA に返金します');
+    expect(restored.onSwipeRight?.label, '返金する \$120');
+  });
+
+  test('impact defaults to empty and hides (old cards unchanged)', () {
+    final task = TaskCard.fromJson(reference);
+    expect(task.impact.isEmpty, isTrue);
+    expect(task.onSwipeRight?.label, isNull);
+    expect(task.toJson().containsKey('impact'), isFalse);
+  });
+
+  test('riskLevel tiers by severity, reversibility, and cost (I-102)', () {
+    TaskCard card(Map<String, dynamic> overlay) =>
+        TaskCard.fromJson(<String, dynamic>{...reference, ...overlay});
+    expect(
+      riskLevel(card(<String, dynamic>{
+        'severity': 'critical',
+        'impact': {'reversible': false},
+      })),
+      RiskLevel.critical,
+    );
+    expect(
+      riskLevel(card(<String, dynamic>{
+        'severity': 'warning',
+        'impact': {
+          'reversible': false,
+          'cost': {'amount': 500, 'currency': 'USD'},
+        },
+      })),
+      RiskLevel.high,
+    );
+    expect(
+      riskLevel(card(<String, dynamic>{
+        'severity': 'info',
+        'impact': {
+          'summary': 'x',
+          'cost': {'amount': 5, 'currency': 'USD'},
+        },
+      })),
+      RiskLevel.low,
+    );
   });
 }

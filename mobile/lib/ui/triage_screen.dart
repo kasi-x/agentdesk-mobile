@@ -42,11 +42,25 @@ class _TriageScreenState extends State<TriageScreen> {
 
   void _showToast(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
+    final repo = context.read<TaskRepository>();
+    final messenger = ScaffoldMessenger.of(context)..hideCurrentSnackBar();
+    // The hub holds triage replies for UNDO_GRACE_MS (I-104): offer reversal.
+    if (message == '処理しました' && repo.lastUndoneTaskId != null) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: const Text('処理しました'),
+          duration: const Duration(seconds: 5),
+          action: SnackBarAction(
+            label: '元に戻す',
+            onPressed: () => unawaited(repo.undoLast()),
+          ),
+        ),
+      );
+    } else {
+      messenger.showSnackBar(
         SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
       );
+    }
   }
 
   /// Optimistic: the card leaves the stack right now; the decision is
@@ -57,7 +71,12 @@ class _TriageScreenState extends State<TriageScreen> {
     Map<String, dynamic>? data,
     required String source,
   }) {
-    HapticFeedback.mediumImpact();
+    final risk = riskLevel(task);
+    if (risk == RiskLevel.critical) {
+      HapticFeedback.heavyImpact();
+    } else {
+      HapticFeedback.mediumImpact();
+    }
     context
         .read<TaskRepository>()
         .triage(task, actionName: actionName, data: data, source: source);
@@ -114,17 +133,54 @@ class _TriageScreenState extends State<TriageScreen> {
       body: tasks.isEmpty
           ? _EmptyState(reconnecting: !repo.connected.value)
           : _buildStack(tasks),
+      bottomNavigationBar: tasks.isEmpty
+          ? null
+          : _ActionBar(
+              task: tasks.first,
+              onApprove: () {
+                final task = tasks.first;
+                final binding = task.onSwipeRight;
+                _triage(
+                  task,
+                  actionName: binding?.actionName ?? 'approve',
+                  data: binding?.payload,
+                  source: ActionSource.swipeGesture,
+                );
+              },
+              onReject: () {
+                final task = tasks.first;
+                final binding = task.onSwipeLeft;
+                _triage(
+                  task,
+                  actionName: binding?.actionName ?? 'reject',
+                  data: binding?.payload,
+                  source: ActionSource.swipeGesture,
+                );
+              },
+              onSnooze: () =>
+                  context.read<TaskRepository>().snooze(tasks.first.taskId),
+            ),
     );
   }
 
   Widget _buildStack(List<TaskCard> tasks) {
+    // I-102: heavier cards need a longer drag (default 50px). Critical cards
+    // disable swipe-approve entirely — the action bar's hold-to-confirm
+    // (I-103/I-134) is the only approve path.
+    final topRisk = tasks.isEmpty ? RiskLevel.low : riskLevel(tasks.first);
     return CardSwiper(
       controller: _controller,
       cardsCount: tasks.length,
       isLoop: false,
+      threshold: switch (topRisk) {
+        RiskLevel.critical => 10000, // effectively swipe-locked
+        RiskLevel.high => 120,
+        RiskLevel.low => 50,
+      },
       numberOfCardsDisplayed: tasks.length >= 3 ? 3 : tasks.length,
-      allowedSwipeDirection: const AllowedSwipeDirection.only(
-        right: true,
+      allowedSwipeDirection: AllowedSwipeDirection.only(
+        // Critical + irreversible: no swipe-approve (long-press instead).
+        right: topRisk != RiskLevel.critical,
         left: true,
         up: false, // inspect is tap-only; an up-swipe cannot be cancelled
         down: true,
@@ -176,11 +232,140 @@ class _TriageScreenState extends State<TriageScreen> {
         source: ActionSource.swipeGesture,
       );
     } else if (direction == CardSwiperDirection.bottom) {
+      HapticFeedback.selectionClick();
       repo.snooze(task.taskId);
     } else {
       return false;
     }
     return true;
+  }
+}
+
+/// Thumb-reach action bar (I-134): ✕ / 後で / ✓. On critical-risk cards
+/// the ✓ becomes a hold-to-confirm ring (I-103) — release early to cancel.
+class _ActionBar extends StatefulWidget {
+  final TaskCard task;
+  final VoidCallback onApprove;
+  final VoidCallback onReject;
+  final VoidCallback onSnooze;
+
+  const _ActionBar({
+    required this.task,
+    required this.onApprove,
+    required this.onReject,
+    required this.onSnooze,
+  });
+
+  @override
+  State<_ActionBar> createState() => _ActionBarState();
+}
+
+class _ActionBarState extends State<_ActionBar> {
+  double _hold = 0;
+  Timer? _timer;
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  void _startHold() {
+    _timer?.cancel();
+    const steps = 20;
+    var tick = 0;
+    _timer = Timer.periodic(const Duration(milliseconds: 30), (t) {
+      tick++;
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
+      setState(() => _hold = tick / steps);
+      if (tick >= steps) {
+        t.cancel();
+        HapticFeedback.heavyImpact();
+        widget.onApprove();
+      }
+    });
+  }
+
+  void _cancelHold() {
+    _timer?.cancel();
+    if (mounted) setState(() => _hold = 0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final critical = riskLevel(widget.task) == RiskLevel.critical;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 14),
+        child: Row(
+          children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.close, size: 18),
+                label: const Text('却下'),
+                onPressed: () {
+                  HapticFeedback.mediumImpact();
+                  widget.onReject();
+                },
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.schedule, size: 18),
+                label: const Text('後で'),
+                onPressed: () {
+                  HapticFeedback.selectionClick();
+                  widget.onSnooze();
+                },
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: critical
+                  ? GestureDetector(
+                      onLongPressStart: (_) => _startHold(),
+                      onLongPressEnd: (_) => _cancelHold(),
+                      onLongPressCancel: _cancelHold,
+                      child: Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          FilledButton.icon(
+                            icon: const Icon(Icons.fingerprint, size: 18),
+                            label: const Text('長押し承認'),
+                            onPressed: () {},
+                          ),
+                          Positioned.fill(
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: FractionallySizedBox(
+                                alignment: Alignment.centerLeft,
+                                widthFactor: _hold,
+                                child: Container(
+                                  color: Colors.white.withOpacity(0.3),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : FilledButton.icon(
+                      icon: const Icon(Icons.check, size: 18),
+                      label: const Text('承認'),
+                      onPressed: () {
+                        HapticFeedback.mediumImpact();
+                        widget.onApprove();
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

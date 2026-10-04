@@ -55,22 +55,76 @@ class CardComponent {
 
 class ActionBinding {
   final String actionName;
+  final String? label;
   final Map<String, dynamic> payload;
 
   const ActionBinding({
     required this.actionName,
+    this.label,
     this.payload = const <String, dynamic>{},
   });
 
   factory ActionBinding.fromJson(dynamic raw) {
     if (raw is! Map) return const ActionBinding(actionName: 'unknown');
+    final label = raw['label'];
     return ActionBinding(
       actionName: (raw['actionName'] as String?) ?? 'unknown',
+      label: label is String && label.isNotEmpty ? label : null,
       payload: raw['payload'] is Map
           ? Map<String, dynamic>.from(raw['payload'] as Map)
           : const <String, dynamic>{},
     );
   }
+}
+
+/// What approving does + whether it can be taken back (I-202, P3/P5).
+/// Optional — old cards omit it and clients hide the row.
+class TaskImpact {
+  final String? summary;
+  final bool? reversible;
+  final num? amount;
+  final String? currency;
+  final String? scope;
+
+  const TaskImpact({
+    this.summary,
+    this.reversible,
+    this.amount,
+    this.currency,
+    this.scope,
+  });
+
+  factory TaskImpact.fromJson(dynamic raw) {
+    if (raw is! Map) return const TaskImpact();
+    final cost = raw['cost'];
+    return TaskImpact(
+      summary: raw['summary'] is String ? raw['summary'] as String : null,
+      reversible: raw['reversible'] is bool ? raw['reversible'] as bool : null,
+      amount: cost is Map && cost['amount'] is num ? cost['amount'] as num : null,
+      currency:
+          cost is Map && cost['currency'] is String ? cost['currency'] as String : null,
+      scope: raw['scope'] is String ? raw['scope'] as String : null,
+    );
+  }
+
+  bool get isEmpty =>
+      summary == null && reversible == null && amount == null && scope == null;
+}
+
+/// Risk tier driving swipe weight, haptics, and the action bar (I-102, P2).
+/// Pure client-side derivation from wire fields — no protocol change.
+enum RiskLevel { low, high, critical }
+
+/// High risk: critical severity, irreversible impact, or a declared cost
+/// at/above [highCostThreshold]. Critical risk: critical AND irreversible.
+RiskLevel riskLevel(TaskCard task, {num highCostThreshold = 100}) {
+  final irreversible = task.impact.reversible == false;
+  final costly =
+      task.impact.amount != null && task.impact.amount! >= highCostThreshold;
+  final critical = task.severity == 'critical';
+  if (critical && (irreversible || costly)) return RiskLevel.critical;
+  if (critical || irreversible || costly) return RiskLevel.high;
+  return RiskLevel.low;
 }
 
 class TaskCard {
@@ -81,6 +135,7 @@ class TaskCard {
   final List<String> confidenceReasons;
   final String severity;
   final String summary;
+  final TaskImpact impact;
   final String? surfaceId;
   final DateTime createdAt;
   final String? replyUrl;
@@ -97,6 +152,7 @@ class TaskCard {
     required this.confidenceReasons,
     required this.severity,
     required this.summary,
+    this.impact = const TaskImpact(),
     required this.surfaceId,
     required this.createdAt,
     required this.replyUrl,
@@ -124,6 +180,7 @@ class TaskCard {
           : const <String>[],
       severity: (raw['severity'] as String?) ?? 'info',
       summary: (raw['summary'] as String?) ?? '(no summary)',
+      impact: TaskImpact.fromJson(raw['impact']),
       surfaceId: raw['surfaceId'] as String?,
       createdAt: createdAt,
       replyUrl: raw['replyUrl'] as String?,
@@ -174,7 +231,17 @@ class TaskCard {
         'confidenceReasons': confidenceReasons,
         'severity': severity,
         'summary': summary,
-        if (surfaceId != null) 'surfaceId': surfaceId,
+        if (!impact.isEmpty)
+          'impact': <String, dynamic>{
+            if (impact.summary != null) 'summary': impact.summary,
+            if (impact.reversible != null) 'reversible': impact.reversible,
+            if (impact.amount != null)
+              'cost': <String, dynamic>{
+                'amount': impact.amount,
+                if (impact.currency != null) 'currency': impact.currency,
+              },
+            if (impact.scope != null) 'scope': impact.scope,
+          },
         'createdAt': createdAt.toUtc().toIso8601String(),
         if (replyUrl != null) 'replyUrl': replyUrl,
         'components': components
@@ -189,11 +256,13 @@ class TaskCard {
           if (onSwipeRight != null)
             'onSwipeRight': <String, dynamic>{
               'actionName': onSwipeRight!.actionName,
+              if (onSwipeRight!.label != null) 'label': onSwipeRight!.label,
               'payload': onSwipeRight!.payload,
             },
           if (onSwipeLeft != null)
             'onSwipeLeft': <String, dynamic>{
               'actionName': onSwipeLeft!.actionName,
+              if (onSwipeLeft!.label != null) 'label': onSwipeLeft!.label,
               'payload': onSwipeLeft!.payload,
             },
           'inspectForm': inspectForm

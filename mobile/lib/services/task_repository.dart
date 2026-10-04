@@ -153,6 +153,9 @@ class TaskRepository extends ChangeNotifier {
     final result = await api.sendAction(reply);
     switch (result) {
       case ActionSendResult.sent:
+        _lastUndoneTask = null;
+        _lastUndoneTask = _UndoneTask(taskId: reply.taskId, at: DateTime.now());
+        _toast('処理しました');
         break;
       case ActionSendResult.conflict:
         _toast('処理済みのタスクです（別デバイスで承認済み）');
@@ -164,6 +167,42 @@ class TaskRepository extends ChangeNotifier {
         _queue.add(reply);
         await _persistQueue();
         _toast('オフライン: 端末に保存しました（再接続時に送信）');
+        break;
+    }
+  }
+
+  _UndoneTask? _lastUndoneTask;
+
+  /// The most recently triaged task id, while its server grace window
+  /// (I-104) may still be open. Private type stays out of the public API.
+  String? get lastUndoneTaskId => _lastUndoneTask?.taskId;
+
+  void clearUndoWindow() {
+    _lastUndoneTask = null;
+    notifyListeners();
+  }
+
+  /// Ask the hub to revive the last triaged task (I-104). The revived card
+  /// arrives via SSE `createTaskCard`; a late window reports it.
+  Future<void> undoLast() async {
+    final pending = _lastUndoneTask;
+    if (pending == null) return;
+    _lastUndoneTask = null;
+    notifyListeners();
+    final result = await api.sendUndo(pending.taskId);
+    switch (result) {
+      case UndoResult.undone:
+        _toast('元に戻しました');
+        break;
+      case UndoResult.tooLate:
+      case UndoResult.notFound:
+        _toast('取り消し期限を過ぎています');
+        break;
+      case UndoResult.rejected:
+        _toast('取り消しが拒否されました');
+        break;
+      case UndoResult.networkError:
+        _toast('オフライン: 取り消しできませんでした');
         break;
     }
   }
@@ -254,4 +293,12 @@ class TaskRepository extends ChangeNotifier {
     _toastSeq++;
     onToast?.call(message);
   }
+}
+
+/// A triage awaiting the end of its server Undo grace window (I-104).
+class _UndoneTask {
+  final String taskId;
+  final DateTime at;
+
+  _UndoneTask({required this.taskId, required this.at});
 }

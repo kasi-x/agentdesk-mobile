@@ -61,10 +61,32 @@ function clear(node) {
   node.textContent = '';
 }
 
-function toast(message) {
+function toast(message, action) {
+  const box = document.getElementById('toasts');
   const t = el('div', 'toast', message);
-  document.getElementById('toasts').appendChild(t);
-  setTimeout(() => t.remove(), TOAST_MS);
+  if (action && action.label && typeof action.onClick === 'function') {
+    const btn = el('button', 'toast-action', action.label);
+    btn.type = 'button';
+    btn.addEventListener('click', () => {
+      action.onClick();
+      t.remove();
+    });
+    t.appendChild(btn);
+  }
+  box.appendChild(t);
+  setTimeout(() => t.remove(), action ? TOAST_MS + 2000 : TOAST_MS);
+}
+
+async function postUndo(taskId) {
+  const res = await fetch(apiUrl('/api/v1/actions/undo'), {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ taskId }),
+  });
+  if (res.ok) return 'undone';
+  if (res.status === 404) return 'not_found';
+  if (res.status === 409) return 'too_late';
+  throw new Error(`undo ${res.status}`);
 }
 
 /* ---------------- API ---------------- */
@@ -118,6 +140,19 @@ async function deliver(reply) {
       toast('処理済み — このタスクはすでに別デバイスで処理されています');
     } else if (result === 'not_found') {
       toast('タスクが見つかりません');
+    } else {
+      // Undo grace (I-104): the hub holds the reply ~5s before delivery.
+      toast('処理しました', {
+        label: '元に戻す',
+        onClick: async () => {
+          try {
+            const undo = await postUndo(reply.taskId);
+            toast(undo === 'undone' ? '元に戻しました' : '取り消し期限を過ぎています');
+          } catch {
+            toast('オフライン: 取り消しできませんでした');
+          }
+        },
+      });
     }
   } catch {
     // Offline / 5xx: persist FIFO (FR-2.3); snapshot sync excludes queued ids.
@@ -174,8 +209,8 @@ function applySnapshot(tasks) {
 }
 
 function snooze(task) {
-  const i = state.stack.findIndex((t) => t.taskId === taskId);
-  if (i < 0) return;
+  const id = typeof task === 'string' ? task : task.taskId;
+  const i = state.stack.findIndex((t) => t.taskId === id);
   const [t] = state.stack.splice(i, 1);
   state.snoozedIds.add(t.taskId);
   persistSnoozed();
@@ -417,8 +452,33 @@ function renderCard(task) {
 
   inner.appendChild(el('div', 'summary', task.summary || ''));
 
-  for (const comp of orderedComponents(task)) inner.appendChild(renderComponent(comp, task));
-  card.appendChild(inner);
+  // "承認すると…" + reversible badge (I-202). Hidden when no impact.
+  if (task.impact && typeof task.impact === 'object') {
+    const imp = task.impact;
+    const parts = [];
+    if (typeof imp.summary === 'string' && imp.summary) parts.push(imp.summary);
+    if (imp.cost && typeof imp.cost.amount === 'number') {
+      parts.push(`${imp.cost.currency || ''} ${imp.cost.amount}`.trim());
+    }
+    if (typeof imp.scope === 'string' && imp.scope) parts.push(imp.scope);
+    if (parts.length || imp.reversible === true || imp.reversible === false) {
+      const row = el('div', 'impact');
+      row.appendChild(el(
+        'div',
+        'impact-text',
+        parts.length ? `承認すると ${parts.join(' / ')}` : '承認すると実行されます',
+      ));
+      if (imp.reversible === true || imp.reversible === false) {
+        row.appendChild(el(
+          'span',
+          imp.reversible ? 'badge info' : 'badge warning',
+          imp.reversible ? '取り消し可' : '取り消し不可',
+        ));
+      }
+      inner.appendChild(row);
+    }
+  }
+
 
   // Actions row.
   const actions = el('div', 'card-actions');
@@ -446,6 +506,7 @@ function renderCard(task) {
   snz.addEventListener('click', () => snooze(task));
 
   actions.append(reject, approve, inspect, snz);
+  card.appendChild(inner);
   card.appendChild(actions);
   return card;
 }

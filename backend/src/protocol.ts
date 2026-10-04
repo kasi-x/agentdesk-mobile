@@ -16,7 +16,22 @@ export interface CardComponent {
 
 export interface ActionBinding {
   actionName: string;
+  /** Swipe-overlay verb shown while dragging (I-130), e.g. "返金する $120". */
+  label?: string;
   payload?: Record<string, unknown>;
+}
+
+export interface ImpactCost {
+  amount: number;
+  currency: string;
+}
+
+/** What approving does + whether it can be taken back (I-202, P3/P5). */
+export interface TaskImpact {
+  summary?: string;
+  reversible?: boolean;
+  cost?: ImpactCost;
+  scope?: string;
 }
 
 export interface TaskCardActions {
@@ -35,6 +50,8 @@ export interface TaskCardPayload {
   confidenceReasons?: string[];
   severity?: "info" | "warning" | "critical";
   summary: string;
+  /** "承認すると…" + reversible badge (I-202). Optional, old cards omit it. */
+  impact?: TaskImpact;
   surfaceId?: string;
   createdAt: string;
   replyUrl?: string;
@@ -51,13 +68,15 @@ export interface ActionReply {
   data?: Record<string, unknown>;
 }
 
-export type TaskStatus = "pending" | "processed";
+export type TaskStatus = "pending" | "committing" | "processed";
 
 export interface StoredTask {
   task: TaskCardPayload;
   status: TaskStatus;
   nonce: string;
   createdAt: number;
+  /** Set when status flips to committing (I-104): agent reply + sweep wait. */
+  commitAt?: number;
   processedAt?: number;
   processedBy?: string;
 }
@@ -67,6 +86,11 @@ export type ActionDecision =
   | { kind: "conflict"; reason: "already_processed" }
   | { kind: "not_found" }
   | { kind: "bad_nonce" };
+
+export type UndoDecision =
+  | { kind: "undone" }
+  | { kind: "not_found" }
+  | { kind: "too_late" };
 
 /**
  * Pure compare-and-swap decision for a triage reply (FR-3.1/FR-3.3).
@@ -84,6 +108,37 @@ export function decideAction(
   }
   return { kind: "apply" };
 }
+
+/**
+ * Pure decision for `POST /api/v1/actions/undo` (I-104). Only a task
+ * still inside its Undo grace window (`committing`) can return to
+ * `pending`; anything else is `too_late` (processed) or `not_found`.
+ * Nonce is intentionally NOT checked: the client holds the consuming
+ * nonce and the undo must work even if the card was re-issued.
+ */
+export function decideUndo(
+  stored: StoredTask | undefined,
+): UndoDecision {
+  if (!stored) return { kind: "not_found" };
+  if (stored.status !== "committing") return { kind: "too_late" };
+  return { kind: "undone" };
+}
+
+export interface UndoRequest {
+  taskId: string;
+}
+
+/** Validates `POST /api/v1/actions/undo` (I-104): only taskId is required. */
+export function validateUndoRequest(
+  body: unknown,
+): ValidationResult<UndoRequest> {
+  if (!isRecord(body)) return fail("payload must be a JSON object");
+  if (typeof body.taskId !== "string" || body.taskId.length === 0) {
+    return fail("taskId (string) is required");
+  }
+  return { ok: true, value: { taskId: body.taskId } };
+}
+
 
 export type ValidationResult<T> =
   | { ok: true; value: T }
@@ -154,6 +209,9 @@ export function validateTaskCard(
       }
       actions[key] = {
         actionName: binding.actionName,
+        ...(typeof binding.label === "string" && binding.label.length > 0
+          ? { label: binding.label }
+          : {}),
         ...(isRecord(binding.payload) ? { payload: binding.payload } : {}),
       };
     }
@@ -220,6 +278,7 @@ export function validateTaskCard(
         ? body.createdAt
         : new Date().toISOString(),
     ...(replyUrl !== undefined ? { replyUrl: replyUrl as string } : {}),
+    ...(isRecord(body.impact) ? { impact: body.impact as TaskImpact } : {}),
     components: components as CardComponent[],
     actions,
   };

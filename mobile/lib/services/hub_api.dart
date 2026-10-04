@@ -10,9 +10,12 @@ import '../models/triage_action.dart';
 
 enum ActionSendResult { sent, conflict, rejected, networkError }
 
+enum UndoResult { undone, tooLate, notFound, rejected, networkError }
+
 abstract class HubApi {
   Future<List<TaskCard>> fetchPendingTasks();
   Future<ActionSendResult> sendAction(TriageActionReply reply);
+  Future<UndoResult> sendUndo(String taskId);
 }
 
 class HttpHubApi implements HubApi {
@@ -61,6 +64,26 @@ class HttpHubApi implements HubApi {
       return ActionSendResult.networkError;
     } on http.ClientException {
       return ActionSendResult.networkError;
+    }
+  }
+
+  @override
+  Future<UndoResult> sendUndo(String taskId) async {
+    try {
+      final res = await _client
+          .post(_uri('/actions/undo'),
+              headers: _headers, body: jsonEncode({'taskId': taskId}))
+          .timeout(const Duration(seconds: 10));
+      if (res.statusCode == 200) return UndoResult.undone;
+      if (res.statusCode == 404) return UndoResult.notFound;
+      if (res.statusCode == 409) return UndoResult.tooLate;
+      return UndoResult.rejected;
+    } on TimeoutException {
+      return UndoResult.networkError;
+    } on SocketException {
+      return UndoResult.networkError;
+    } on http.ClientException {
+      return UndoResult.networkError;
     }
   }
 }

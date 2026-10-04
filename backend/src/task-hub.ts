@@ -1,6 +1,7 @@
 import {
   ActionReply,
   decideAction,
+  decideUndo,
   StoredTask,
   TaskCardPayload,
 } from "./protocol";
@@ -10,6 +11,8 @@ import type { Env } from "./env";
 const HEARTBEAT_MS = 15_000;
 /** Processed tasks only serve 409 answers for late duplicates. */
 const PROCESSED_TTL_MS = 60 * 60 * 1000;
+/** Undo grace window: triage replies wait this long before reaching the agent (I-104). */
+export const UNDO_GRACE_MS = 5_000;
 
 /**
  * Single Durable Object (instance name "global") owning all task state
@@ -37,6 +40,8 @@ export class TaskHub {
         return this.enqueue(request);
       case "/action":
         return this.action(request);
+      case "/undo":
+        return this.undo(request);
       case "/state":
         return json({
           tasks: (await this.pending()).map((t) => t.task),
@@ -110,23 +115,68 @@ export class TaskHub {
       return json({ error: "task_not_found", taskId: reply.taskId }, 404);
     }
 
+    const now = Date.now();
     const updated: StoredTask = {
       ...stored,
-      status: "processed",
-      processedAt: Date.now(),
+      status: "committing",
+      commitAt: now + UNDO_GRACE_MS,
       processedBy: reply.source,
     };
     await this.state.storage.put(key, updated);
+    // Keep the original reply for the delayed agent delivery.
+    await this.state.storage.put(`reply:${reply.taskId}`, reply);
 
     await this.broadcast("dismissTask", {
       taskId: reply.taskId,
       by: reply.source,
     });
-    await this.scheduleSweep();
-    if (updated.task.replyUrl) {
-      this.state.waitUntil(this.deliverToAgent(updated.task.replyUrl, reply));
+    await this.scheduleNextAlarm();
+    return json({
+      ok: true,
+      taskId: reply.taskId,
+      actionName: reply.actionName,
+      undoableUntil: updated.commitAt,
+    });
+  }
+
+  /**
+   * `POST /undo`: return a committing task to pending with a fresh nonce
+   * and re-broadcast it as a new card (I-104). Input-gated like action().
+   */
+  private async undo(request: Request): Promise<Response> {
+    const body = (await request.json()) as { taskId?: unknown };
+    if (typeof body.taskId !== "string" || body.taskId.length === 0) {
+      return json({ error: "invalid_payload", detail: "taskId (string) is required" }, 400);
     }
-    return json({ ok: true, taskId: reply.taskId, actionName: reply.actionName });
+    const key = `task:${body.taskId}`;
+    const stored = await this.state.storage.get<StoredTask>(key);
+    const decision = decideUndo(stored);
+    if (decision.kind === "not_found") {
+      return json({ error: "task_not_found", taskId: body.taskId }, 404);
+    }
+    if (decision.kind === "too_late") {
+      return json({ error: "too_late", taskId: body.taskId }, 409);
+    }
+    if (!stored) {
+      return json({ error: "task_not_found", taskId: body.taskId }, 404);
+    }
+    const card: TaskCardPayload = {
+      ...stored.task,
+      taskId: stored.task.taskId,
+      nonce: crypto.randomUUID(),
+      createdAt: stored.task.createdAt,
+    };
+    const revived: StoredTask = {
+      task: card,
+      status: "pending",
+      nonce: card.nonce,
+      createdAt: stored.createdAt,
+    };
+    await this.state.storage.put(key, revived);
+    await this.state.storage.delete(`reply:${body.taskId}`);
+    await this.broadcast("createTaskCard", card);
+    await this.scheduleNextAlarm();
+    return json({ ok: true, taskId: body.taskId });
   }
 
   private async deliverToAgent(
@@ -196,24 +246,66 @@ export class TaskHub {
     );
   }
 
-  private async scheduleSweep(): Promise<void> {
-    if ((await this.state.storage.getAlarm()) !== null) return;
-    await this.state.storage.setAlarm(Date.now() + PROCESSED_TTL_MS);
+  /**
+   * Single alarm computation (I-104): the next deadline is the earliest of
+   * every committing task's commitAt and every processed task's sweep time.
+   * Always recomputed after action/undo so the alarm never lags.
+   */
+  private async scheduleNextAlarm(): Promise<void> {
+    const now = Date.now();
+    const all = await this.state.storage.list<StoredTask>({ prefix: "task:" });
+    let next: number | null = null;
+    for (const stored of all.values()) {
+      if (stored.status === "committing" && stored.commitAt !== undefined) {
+        next = next === null ? stored.commitAt : Math.min(next, stored.commitAt);
+      } else if (stored.status === "processed" && stored.processedAt !== undefined) {
+        const sweepAt = stored.processedAt + PROCESSED_TTL_MS;
+        if (sweepAt > now) {
+          next = next === null ? sweepAt : Math.min(next, sweepAt);
+        }
+      }
+    }
+    if (next === null) {
+      await this.state.storage.deleteAlarm();
+    } else {
+      await this.state.storage.setAlarm(Math.max(next, now));
+    }
   }
 
   async alarm(): Promise<void> {
-    const cutoff = Date.now() - PROCESSED_TTL_MS;
+    const now = Date.now();
     const all = await this.state.storage.list<StoredTask>({ prefix: "task:" });
-    const doomed: string[] = [];
-    let processedLeft = false;
+    // 1) Committing tasks past their grace window → processed + agent delivery.
     for (const [key, stored] of all) {
-      if (stored.status !== "processed") continue;
-      if ((stored.processedAt ?? 0) < cutoff) doomed.push(key);
-      else processedLeft = true;
+      if (stored.status !== "committing") continue;
+      if ((stored.commitAt ?? Number.POSITIVE_INFINITY) > now) continue;
+      const reply = await this.state.storage.get<ActionReply>(`reply:${stored.task.taskId}`);
+      const finalized: StoredTask = {
+        ...stored,
+        status: "processed",
+        commitAt: undefined,
+        processedAt: now,
+      };
+      await this.state.storage.put(key, finalized);
+      await this.state.storage.delete(`reply:${stored.task.taskId}`);
+      if (stored.task.replyUrl && reply) {
+        this.state.waitUntil(this.deliverToAgent(stored.task.replyUrl, reply));
+      }
     }
-    if (doomed.length > 0) await this.state.storage.delete(doomed);
-    if (processedLeft) {
-      await this.state.storage.setAlarm(Date.now() + PROCESSED_TTL_MS);
+    // 2) Sweep processed tasks older than the TTL.
+    const cutoff = now - PROCESSED_TTL_MS;
+    const doomed: string[] = [];
+    for (const [key, stored] of all) {
+      const current = await this.state.storage.get<StoredTask>(key);
+      if (!current || current.status !== "processed") continue;
+      if ((current.processedAt ?? 0) < cutoff) doomed.push(key);
     }
+    if (doomed.length > 0) {
+      await this.state.storage.delete(doomed);
+      for (const key of doomed) {
+        await this.state.storage.delete(`reply:${key.slice("task:".length)}`);
+      }
+    }
+    await this.scheduleNextAlarm();
   }
 }

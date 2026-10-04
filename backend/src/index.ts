@@ -1,4 +1,4 @@
-import { validateActionReply, validateTaskCard } from "./protocol";
+import { validateActionReply, validateTaskCard, validateUndoRequest } from "./protocol";
 import { json } from "./http";
 import type { Env } from "./env";
 
@@ -61,6 +61,32 @@ export default {
         );
         // Rebuild so cors() header mutation never touches an immutable
         // subresponse (same-origin browser POSTs surface this as a 500).
+        const res = new Response(await doRes.text(), {
+          status: doRes.status,
+          headers: { "content-type": "application/json" },
+        });
+        return cors(res, request, env);
+      }
+
+      if (url.pathname === "/api/v1/actions/undo" && request.method === "POST") {
+        if (!authorized(request, env.CLIENT_TOKEN)) return unauthorized(request, env);
+        const parsed = validateUndoRequest(await request.json());
+        if (!parsed.ok) {
+          return cors(
+            json({ error: "invalid_payload", detail: parsed.error }, 400),
+            request,
+            env,
+          );
+        }
+        const doRes = await env.TASK_HUB.getByName("global").fetch(
+          "https://task-hub/undo",
+          {
+            method: "POST",
+            body: JSON.stringify(parsed.value),
+            headers: { "content-type": "application/json" },
+          },
+        );
+        // Same immutable-subresponse rebuild as /actions (Phase 2 fix).
         const res = new Response(await doRes.text(), {
           status: doRes.status,
           headers: { "content-type": "application/json" },

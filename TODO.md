@@ -17,7 +17,7 @@
 
 誤操作に強くするのが最優先。スワイプUIの最大の弱点を先に潰す。
 
-- [ ] **Undo猶予** (I-104)
+- [x] **Undo猶予** (I-104)
   - [ ] hub: `StoredTask.status` に `committing` を追加。accept 時は `committing` +
         `commitAt = now + UNDO_GRACE_MS`(既定 5s)、DO alarm で `processed` に確定して
         replyUrl へ転送。`dismissTask` は `committing` 時点で配信(他端末からは即消える)
@@ -27,7 +27,7 @@
   - [ ] mobile/web: 処理済みトースト(後で I-120 のトレイに置き換え)に「元に戻す」
   - [ ] vitest: committing→undo / committing→processed / processed→undo=409 / 二重 undo
   - [ ] protocol.md: 状態遷移図と新エンドポイント
-- [ ] **承認すると行・可逆性** (I-202, I-130)
+- [x] **承認すると行・可逆性** (I-202, I-130)
   - [ ] protocol: `impact: {summary?, reversible?, cost?: {amount, currency}, scope?}` と
         `actions.onSwipeRight.label` / `onSwipeLeft.label`
   - [ ] mobile: カード上部に「承認すると…」と可逆性バッジ。スワイプ中のオーバーレイ文言を

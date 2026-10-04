@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   decideAction,
+  decideUndo,
   StoredTask,
   validateActionReply,
   validateTaskCard,
+  validateUndoRequest,
 } from "./protocol";
 
 const baseCard = {
@@ -111,6 +113,37 @@ describe("validateTaskCard", () => {
       validateTaskCard({ ...baseCard, components: "not-an-array" }).ok,
     ).toBe(false);
   });
+
+  it("passes impact and swipe labels through (I-202, I-130)", () => {
+    const result = validateTaskCard({
+      ...baseCard,
+      impact: {
+        summary: "UserA に返金します",
+        reversible: false,
+        cost: { amount: 120, currency: "USD" },
+        scope: "Stripe",
+      },
+      actions: {
+        onSwipeRight: { actionName: "approve", label: "返金する $120" },
+        onSwipeLeft: { actionName: "reject", label: "やめておく" },
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.impact?.summary).toBe("UserA に返金します");
+    expect(result.value.impact?.reversible).toBe(false);
+    expect(result.value.impact?.cost).toEqual({ amount: 120, currency: "USD" });
+    expect(result.value.actions.onSwipeRight?.label).toBe("返金する $120");
+    expect(result.value.actions.onSwipeLeft?.label).toBe("やめておく");
+  });
+
+  it("omits impact and labels when absent (old cards unchanged)", () => {
+    const result = validateTaskCard(baseCard);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.impact).toBeUndefined();
+    expect(result.value.actions.onSwipeRight?.label).toBeUndefined();
+  });
 });
 
 describe("validateActionReply", () => {
@@ -198,5 +231,44 @@ describe("decideAction (nonce CAS, FR-3.1/FR-3.3)", () => {
         source: "swipe_gesture",
       }),
     ).toEqual({ kind: "not_found" });
+  });
+});
+
+describe("decideUndo + validateUndoRequest (I-104)", () => {
+  it("undoes a committing task", () => {
+    expect(
+      decideUndo(storedFixture({ status: "committing", commitAt: 999 })),
+    ).toEqual({ kind: "undone" });
+  });
+
+  it("rejects undo on a fresh pending task as too_late", () => {
+    expect(decideUndo(storedFixture())).toEqual({ kind: "too_late" });
+  });
+
+  it("rejects undo on a processed task as too_late", () => {
+    expect(
+      decideUndo(storedFixture({ status: "processed", processedAt: 2 })),
+    ).toEqual({ kind: "too_late" });
+  });
+
+  it("rejects double undo: after revive the task is pending again", () => {
+    // Revived tasks come back as pending (fresh nonce) — undo no longer applies.
+    expect(decideUndo(storedFixture({ status: "pending" }))).toEqual({
+      kind: "too_late",
+    });
+  });
+
+  it("reports not_found for unknown tasks", () => {
+    expect(decideUndo(undefined)).toEqual({ kind: "not_found" });
+  });
+
+  it("validates the undo request body", () => {
+    expect(validateUndoRequest({ taskId: "task_x" })).toEqual({
+      ok: true,
+      value: { taskId: "task_x" },
+    });
+    expect(validateUndoRequest({}).ok).toBe(false);
+    expect(validateUndoRequest({ taskId: "" }).ok).toBe(false);
+    expect(validateUndoRequest(null).ok).toBe(false);
   });
 });

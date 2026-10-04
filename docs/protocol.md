@@ -18,11 +18,11 @@ treat every string as display-only text: no HTML, no JS, no WebView
 | GET | `/api/v1/stream` | Bearer `$CLIENT_TOKEN` (or `?token=` for EventSource) | client | SSE event stream |
 | GET | `/api/v1/state` | Bearer `$CLIENT_TOKEN` | client | snapshot of pending tasks (cold-start priming, NFR-1.2) |
 | POST | `/api/v1/actions` | Bearer `$CLIENT_TOKEN` | client | deliver a triage decision (7.2 payload) |
-| GET | `/healthz` | none | ops | liveness |
+| POST | `/api/v1/actions/undo` | Bearer `$CLIENT_TOKEN` | client | undo a triage inside the grace window (I-104, body `{"taskId"}`) |
 
 Errors: `401` bad/missing token · `400` invalid payload (message says why)
 · `404` `task_not_found` · `409` `already_processed` / `bad_nonce` /
-`duplicate_task`. CORS: `ALLOWED_ORIGINS` env (comma-separated, `*` for dev).
+`duplicate_task` / `too_late` (undo after the grace window). CORS: `ALLOWED_ORIGINS` env (comma-separated, `*` for dev).
 
 ## SSE events (`GET /api/v1/stream`)
 
@@ -117,6 +117,12 @@ rendered as plain text never markup), `Chips`
 action with `source: "quick_chip"`, options without `actionName` open
 the inspect sheet).
 
+Card impact (I-202): optional `impact: {summary?, reversible?, cost?:
+{amount, currency}, scope?}` — clients render “承認すると…” plus a
+reversible badge (`取り消し可` / `取り消し不可`) at the top of the card.
+Swipe labels (I-130): `actions.onSwipeRight.label` / `onSwipeLeft.label`
+replace the generic APPROVE / REJECT overlay verb while dragging.
+
 Inspect-form catalog: `TimePicker`, `DatePicker`, `Slider`
 (`min`/`max`/`default`/`divisions`), `Segmented` (`options`),
 `TextField` (`label`, `multiline`).
@@ -141,9 +147,12 @@ component, merges the `onSwipeRight.payload` underneath, and sends
 `source` ∈ `swipe_gesture` | `quick_chip` | `inspect_form` |
 `lock_screen` (Phase 3) | `web_ui` | `snooze_local`.
 
-Hub semantics (FR-3.3): the first accepted action flips the task to
-`processed` and consumes the nonce; concurrent duplicates get
-`409 {"error":"already_processed"}` and clients show a “処理済み” toast.
-A wrong nonce → `409 bad_nonce`. Unknown task → `404`. Accepted actions
-are broadcast as `dismissTask` to all connected devices and forwarded to
-`replyUrl` when present.
+Task lifecycle: `pending` → `committing` → `processed` (I-104). The first
+accepted action flips the task to `committing` (not `processed`): the card
+is dismissed everywhere at once (`dismissTask`), but the agent reply waits
+`UNDO_GRACE_MS` (5s) before delivery. Inside the window,
+`POST /api/v1/actions/undo {"taskId"}` returns the task to `pending` with a
+fresh nonce and re-broadcasts it as `createTaskCard`; after the alarm
+commits it to `processed`, undo gets `409 {"error":"too_late"}`. Concurrent
+duplicates get `409 {"error":"already_processed"}` and clients show a
+“処理済み” toast. A wrong nonce → `409 bad_nonce`. Unknown task → `404`.

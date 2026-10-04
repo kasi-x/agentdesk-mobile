@@ -55,6 +55,7 @@ function sampleCards(callbackBase) {
       actions: {
         onSwipeRight: {
           actionName: "approve",
+          label: "日程を変更する",
           payload: { decision: "ACCEPT", newTime: "2026-10-05 16:30" },
         },
         onSwipeLeft: { actionName: "reject", payload: { decision: "DECLINE" } },
@@ -75,6 +76,12 @@ function sampleCards(callbackBase) {
       severity: "warning",
       confidenceReasons: ["返金額が$100超", "対象ユーザーの異議申立履歴あり"],
       summary: "Stripe返金の承認依頼",
+      impact: {
+        summary: "UserA に $120.00 を返金します",
+        reversible: false,
+        cost: { amount: 120, currency: "USD" },
+        scope: "Stripe",
+      },
       replyUrl: `${callbackBase}/callback/billing`,
       components: [
         {
@@ -97,7 +104,11 @@ function sampleCards(callbackBase) {
         },
       ],
       actions: {
-        onSwipeRight: { actionName: "approve", payload: { decision: "REFUND", amount: 120 } },
+        onSwipeRight: {
+          actionName: "approve",
+          label: "返金する $120",
+          payload: { decision: "REFUND", amount: 120 },
+        },
         onSwipeLeft: { actionName: "reject", payload: { decision: "DENY" } },
         inspectForm: [
           {

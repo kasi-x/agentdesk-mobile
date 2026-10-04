@@ -347,13 +347,24 @@ body {
 .text-caption {
   font-size: 12px;
   color: var(--muted);
-  line-height: 1.6;
+  line-height: 1.5;
 }
 
-.text-body {
-  font-size: 14px;
+.impact {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: var(--surface-2);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.impact-text {
+  flex: 1;
   color: var(--text);
-  line-height: 1.6;
+  opacity: 0.85;
+  line-height: 1.5;
 }
 
 .text-title {
@@ -700,8 +711,20 @@ body {
   font-size: 13px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
   animation: toast-in 0.18s ease;
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
+.toast-action {
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0;
+}
 @keyframes toast-in {
   from {
     opacity: 0;
