@@ -1,0 +1,12 @@
+# worktrees (per project protocol)
+.worktrees/
+
+# node / wrangler
+node_modules/
+.wrangler/
+.dev.vars
+dist/
+
+# logs / OS
+*.log
+.DS_Store
