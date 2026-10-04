@@ -176,4 +176,33 @@ void main() {
     await repo.undo('never-triaged');
     expect(repo.lastToast, contains('元に戻せません'));
   });
+
+  test('re-broadcast (escalate) replaces the held card in place (I-203)', () {
+    final repo = _repo(FakeHubApi());
+    repo.upsert(_task('e1'));
+    repo.upsert(_task('e2'));
+    final escalated = TaskCard.fromJson(<String, dynamic>{
+      'taskId': 'e2',
+      'nonce': 'n_e2_rotated',
+      'agent': {'name': 'A'},
+      'summary': 's',
+      'severity': 'critical',
+      'components': <dynamic>[],
+    });
+    repo.upsert(escalated);
+    expect(repo.pendingCount, 2);
+    expect(repo.stack.first.taskId, 'e2'); // position kept (top)
+    expect(repo.stack.first.nonce, 'n_e2_rotated');
+    expect(repo.stack.first.severity, 'critical');
+    expect(repo.stack[1].taskId, 'e1');
+  });
+
+  test('remote dismissal by on_expire says the hub auto-processed (I-203)',
+      () {
+    final repo = _repo(FakeHubApi());
+    repo.upsert(_task('x1'));
+    repo.remove('x1', remote: true, remoteBy: 'on_expire');
+    expect(repo.pendingCount, 0);
+    expect(repo.lastToast, contains('期限のため自動処理されました'));
+  });
 }

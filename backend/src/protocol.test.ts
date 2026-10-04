@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   decideAction,
   decideUndo,
+  expiryDue,
   StoredTask,
   validateActionReply,
   validateTaskCard,
@@ -313,5 +314,80 @@ describe("decideAction under committing (I-104)", () => {
         source: "web_ui",
       }),
     ).toEqual({ kind: "conflict", reason: "already_processed" });
+  });
+});
+
+describe("expiry policy (I-203)", () => {
+  const past = "2026-01-01T00:00:00Z";
+  const future = "2999-01-01T00:00:00Z";
+
+  function cardFixture(
+    overrides: Record<string, unknown>,
+  ): StoredTask {
+    const card = validateTaskCard({ ...baseCard, ...overrides });
+    if (!card.ok) throw new Error(`fixture invalid: ${card.error}`);
+    return storedFixture({ task: card.value });
+  }
+
+  it("validates expiresAt / onExpire strictly", () => {
+    expect(validateTaskCard({ ...baseCard, expiresAt: past }).ok).toBe(true);
+    expect(validateTaskCard({ ...baseCard, expiresAt: "not-a-date" }).ok).toBe(
+      false,
+    );
+    expect(validateTaskCard({ ...baseCard, onExpire: "approve" }).ok).toBe(
+      false,
+    );
+    expect(
+      validateTaskCard({ ...baseCard, expiresAt: past, onExpire: "nope" }).ok,
+    ).toBe(false);
+  });
+
+  it("fires approve with the declared swipe binding once past due", () => {
+    expect(
+      expiryDue(cardFixture({ expiresAt: past, onExpire: "approve" }), Date.now()),
+    ).toEqual({
+      action: "approve",
+      binding: { actionName: "approve", payload: { decision: "ACCEPT" } },
+    });
+  });
+
+  it("does not fire before the deadline", () => {
+    expect(expiryDue(cardFixture({ expiresAt: future }), Date.now())).toBeNull();
+  });
+
+  it("defaults to drop, and never fires for non-pending or escalated tasks", () => {
+    expect(expiryDue(cardFixture({ expiresAt: past }), Date.now())).toEqual({
+      action: "drop",
+    });
+    const pastCard = validateTaskCard({ ...baseCard, expiresAt: past });
+    if (!pastCard.ok) throw new Error("fixture invalid");
+    expect(
+      expiryDue(
+        storedFixture({ task: pastCard.value, status: "processed" }),
+        Date.now(),
+      ),
+    ).toBeNull();
+    expect(
+      expiryDue(
+        storedFixture({ task: pastCard.value, status: "committing" }),
+        Date.now(),
+      ),
+    ).toBeNull();
+    expect(
+      expiryDue(storedFixture({ task: pastCard.value, escalatedAt: 1 }), Date.now()),
+    ).toBeNull();
+  });
+
+  it("degrades approve/reject without the matching binding to drop", () => {
+    expect(
+      expiryDue(
+        cardFixture({
+          expiresAt: past,
+          onExpire: "reject",
+          actions: { ...baseCard.actions, onSwipeLeft: undefined },
+        }),
+        Date.now(),
+      ),
+    ).toEqual({ action: "drop" });
   });
 });

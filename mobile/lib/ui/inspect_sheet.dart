@@ -243,7 +243,7 @@ class _InspectSheetState extends State<_InspectSheet> {
               style: const TextStyle(fontSize: 13, color: Colors.white70),
             ),
             Text(
-              '${_values[c.id]?.toString() ?? value.toString()}',
+              (_values[c.id]?.toString() ?? value.toString()),
               style: const TextStyle(
                   fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white),
             ),
@@ -306,9 +306,9 @@ class _InspectSheetState extends State<_InspectSheet> {
       width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.orange.withOpacity(0.08),
+        color: Colors.orange.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.orange.withOpacity(0.4)),
+        border: Border.all(color: Colors.orange.withValues(alpha: 0.4)),
       ),
       child: Text(
         'Unsupported form component: ${c.component}',
@@ -348,7 +348,7 @@ class _FormTile extends StatelessWidget {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: Colors.white12),
-          color: Colors.white.withOpacity(0.03),
+          color: Colors.white.withValues(alpha: 0.03),
         ),
         child: Row(
           children: [

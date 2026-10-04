@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../../models/task_card.dart';
-import '../../models/triage_action.dart';
 import 'component_renderer.dart';
 import 'confidence_indicator.dart';
 
@@ -37,7 +36,7 @@ class TaskCardView extends StatelessWidget {
           border: Border.all(color: _edgeColor, width: 1),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.45),
+              color: Colors.black.withValues(alpha: 0.45),
               blurRadius: 24,
               offset: const Offset(0, 12),
             ),
@@ -55,6 +54,10 @@ class TaskCardView extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      if (task.expiresAt != null) ...[
+                        _countdownStrip(),
+                        const SizedBox(height: 10),
+                      ],
                       _header(context),
                       if (task.impact != null) ...[
                         const SizedBox(height: 8),
@@ -91,12 +94,72 @@ class TaskCardView extends StatelessWidget {
   Color get _edgeColor {
     switch (task.severity) {
       case 'critical':
-        return const Color(0xFFFF5C5C).withOpacity(0.45);
+        return const Color(0xFFFF5C5C).withValues(alpha: 0.45);
       case 'warning':
-        return const Color(0xFFFFB020).withOpacity(0.45);
+        return const Color(0xFFFFB020).withValues(alpha: 0.45);
       default:
-        return Colors.white.withOpacity(0.08);
+        return Colors.white.withValues(alpha: 0.08);
     }
+  }
+
+  /// Deadline countdown strip (I-203). Urgency coloring: neutral →
+  /// amber (≤30m) → red (≤5m / past). The hub executes the default
+  /// behavior; the strip only tells the user what will happen.
+  Widget _countdownStrip() {
+    final remaining = task.expiresAt!.difference(DateTime.now());
+    final bool past = remaining.inSeconds <= 0;
+    Color color;
+    if (past || remaining <= const Duration(minutes: 5)) {
+      color = const Color(0xFFFF5C5C);
+    } else if (remaining <= const Duration(minutes: 30)) {
+      color = const Color(0xFFFFB020);
+    } else {
+      color = Colors.white38;
+    }
+    final String when;
+    if (past) {
+      when = '期限切れ';
+    } else {
+      when = '残り ${_formatRemaining(remaining)}';
+    }
+    final verb = switch (task.onExpire) {
+      'approve' => '期限で自動承認',
+      'reject' => '期限で自動却下',
+      'escalate' => '期限で緊急化',
+      _ => '期限で破棄',
+    };
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.hourglass_bottom, size: 13, color: color),
+          const SizedBox(width: 6),
+          Text(
+            past ? '$when · まもなく自動処理' : '$when · $verb',
+            style: TextStyle(
+                fontSize: 11, fontWeight: FontWeight.w700, color: color),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _formatRemaining(Duration remaining) {
+    if (remaining.inHours >= 1) {
+      return '${remaining.inHours}時間${remaining.inMinutes % 60}分';
+    }
+    if (remaining.inMinutes >= 10) {
+      return '${remaining.inMinutes}分';
+    }
+    if (remaining.inMinutes >= 1) {
+      return '${remaining.inMinutes}分${remaining.inSeconds % 60}秒';
+    }
+    return '${remaining.inSeconds}秒';
   }
 
   Widget _header(BuildContext context) {
@@ -104,7 +167,7 @@ class TaskCardView extends StatelessWidget {
       children: [
         CircleAvatar(
           radius: 16,
-          backgroundColor: const Color(0xFF5B8DEF).withOpacity(0.25),
+          backgroundColor: const Color(0xFF5B8DEF).withValues(alpha: 0.25),
           backgroundImage: task.agent.avatarUrl != null
               ? NetworkImage(task.agent.avatarUrl!)
               : null,
@@ -172,9 +235,9 @@ class TaskCardView extends StatelessWidget {
       margin: const EdgeInsets.only(left: 6),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.18),
+        color: color.withValues(alpha: 0.18),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withOpacity(0.5), width: 0.8),
+        border: Border.all(color: color.withValues(alpha: 0.5), width: 0.8),
       ),
       child: Text(
         text,
@@ -193,9 +256,9 @@ class TaskCardView extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.15),
+        color: color.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: color.withOpacity(0.4)),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
       ),
       child: Text(
         label,
@@ -222,7 +285,7 @@ class TaskCardView extends StatelessWidget {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(24),
           color: (approve ? const Color(0xFF2E7D50) : const Color(0xFFB34040))
-              .withOpacity(opacity * 0.55),
+              .withValues(alpha: opacity * 0.55),
         ),
         alignment: Alignment.center,
         child: Column(
@@ -253,7 +316,7 @@ class TaskCardView extends StatelessWidget {
       layer = Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(24),
-          color: const Color(0xFF3D5A99).withOpacity(opacity * 0.55),
+          color: const Color(0xFF3D5A99).withValues(alpha: opacity * 0.55),
         ),
         alignment: Alignment.center,
         child: const Text(

@@ -205,7 +205,7 @@ Undo の受け皿でもあり、「ちゃんと処理した」実感も残す。
 カード上部に「承認すると○○します」と「取り消し可/不可」を常に表示。P3 / P5
 
 ### I-203 期限とカウントダウン
-`proposed` `protocol` `hub` `client` — `expiresAt` と `onExpire`(approve / reject / escalate / drop)。
+`done` `protocol` `hub` `client` — `expiresAt` と `onExpire`(approve / reject / escalate / drop)。
 期限が近いカードに残り時間、ハブが期限で既定動作を実行(自動実行も「自動」と記録)。
 
 ### I-204 カードの更新(updateTaskCard)

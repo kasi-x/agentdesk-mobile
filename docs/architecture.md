@@ -56,9 +56,19 @@ instance (name `"global"`):
    reconnect / app start (FR-2.3). Tasks whose ids sit in the offline
    queue are excluded from snapshot reconciliation so a queued decision
    is not resurrected.
-3. DO CAS: pending + nonce match → `processed`, broadcast
-   `dismissTask`, forward to `replyUrl`. Already processed → `409`
-   → client shows the “処理済み” toast (FR-3.3).
+3. DO CAS: pending + nonce match → `committing` (undo grace, I-104),
+   broadcast `dismissTask`, forward to `replyUrl` when the commit alarm
+   fires. Already decided → `409` → client shows the “処理済み” toast
+   (FR-3.3).
+
+### Expiry (I-203)
+Cards with `expiresAt` join the unified DO alarm's deadline set. When a
+deadline passes, the hub runs the card's `onExpire` default behavior and
+records it as automatic: approve/reject execute the declared swipe
+binding immediately (no undo grace — nobody is present), drop finishes
+the task with an `expire/EXPIRED` reply to `replyUrl`, escalate
+re-broadcasts the card (severity critical, rotated nonce) and clients
+replace it in place. Full semantics: docs/protocol.md.
 
 ### Reconnect / cold start
 SSE (re)connect always receives a `snapshot` of pending tasks first;

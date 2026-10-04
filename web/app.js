@@ -297,7 +297,15 @@ function connect() {
     try {
       const task = JSON.parse(e.data);
       if (!task || !task.taskId) return;
-      if (state.stack.some((t) => t.taskId === task.taskId)) return;
+      // The hub may re-broadcast a card we already hold (I-203 escalate:
+      // rotated nonce + bumped severity) — the hub is the single source
+      // of truth (P9), so replace in place instead of ignoring.
+      const i = state.stack.findIndex((t) => t.taskId === task.taskId);
+      if (i >= 0) {
+        state.stack[i] = task;
+        render();
+        return;
+      }
       if (state.snoozedIds.has(task.taskId)) state.stack.push(task);
       else state.stack.unshift(task);
       render();
@@ -313,7 +321,11 @@ function connect() {
       removeFromStack(data.taskId);
       if (had) {
         render();
-        toast(`他デバイスで処理されました (${data.by || 'unknown'})`);
+        toast(
+          String(data.by || '').startsWith('on_expire')
+            ? '期限のため自動処理されました'
+            : `他デバイスで処理されました (${data.by || 'unknown'})`,
+        );
       }
     } catch {
       /* ignore malformed event */
@@ -450,9 +462,48 @@ function renderComponent(comp, task) {
   }
 }
 
+/* ---------------- expiry countdown (I-203) ---------------- */
+
+function countdownParts(expiresAt, onExpire) {
+  const ms = Date.parse(expiresAt) - Date.now();
+  const verb = { approve: '期限で自動承認', reject: '期限で自動却下', escalate: '期限で緊急化' }[onExpire] || '期限で破棄';
+  if (!(ms > 0)) return { cls: 'past', text: '期限切れ · まもなく自動処理' };
+  const min = Math.floor(ms / 60000);
+  const sec = Math.floor((ms % 60000) / 1000);
+  let left;
+  if (min >= 60) left = `${Math.floor(min / 60)}時間${min % 60}分`;
+  else if (min >= 10) left = `${min}分`;
+  else if (min >= 1) left = `${min}分${sec}秒`;
+  else left = `${sec}秒`;
+  const cls = min <= 5 ? 'urgent' : min <= 30 ? 'soon' : '';
+  return { cls, text: `残り ${left} · ${verb}` };
+}
+
+/** Text-only refresh — a full render() every few seconds would break
+ *  pointer-holds and drags mid-gesture. */
+function updateCountdown(stripEl) {
+  const parts = countdownParts(stripEl.dataset.expires, stripEl.dataset.onexpire);
+  stripEl.className = `countdown ${parts.cls}`.trim();
+  stripEl.textContent = parts.text;
+}
+
+setInterval(() => {
+  document.querySelectorAll('.countdown[data-expires]').forEach(updateCountdown);
+}, 5000);
+
 function renderCard(task) {
   const card = el('div', 'card');
   const inner = el('div', 'card-inner');
+
+  // Expiry countdown strip (I-203): the hub executes the default
+  // behavior at the deadline; this only tells the user what will happen.
+  if (typeof task.expiresAt === 'string' && task.expiresAt) {
+    const strip = el('div', 'countdown');
+    strip.dataset.expires = task.expiresAt;
+    strip.dataset.onexpire = task.onExpire || 'drop';
+    updateCountdown(strip);
+    inner.appendChild(strip);
+  }
 
   // Header: avatar, agent name, time, severity badge.
   const header = el('div', 'card-header');

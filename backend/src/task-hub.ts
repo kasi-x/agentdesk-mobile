@@ -2,6 +2,8 @@ import {
   ActionReply,
   decideAction,
   decideUndo,
+  expiryDue,
+  ExpiryDecision,
   StoredTask,
   TaskCardPayload,
   UNDO_GRACE_MS,
@@ -96,6 +98,8 @@ export class TaskHub {
     };
     await this.state.storage.put(key, stored);
     await this.broadcast("createTaskCard", task);
+    // A deadline on the new card may be earlier than anything pending.
+    await this.rescheduleAlarm();
     return json({ ok: true, taskId: task.taskId }, 201);
   }
 
@@ -256,10 +260,11 @@ export class TaskHub {
   }
 
   /**
-   * One alarm serves both jobs (I-104): commit deadlines for `committing`
-   * tasks and TTL expiry for `processed` ones. Call after every status
-   * change; it recomputes the next deadline from scratch so commits that
-   * finish early never strand a later alarm.
+   * One alarm serves three jobs (I-104, I-203): commit deadlines for
+   * `committing` tasks, expiry deadlines for pending cards with
+   * `expiresAt`, and TTL cleanup for `processed` ones. Call after every
+   * status change; it recomputes the next deadline from scratch so
+   * early-finishing work never strands a later alarm.
    */
   private async rescheduleAlarm(): Promise<void> {
     const now = Date.now();
@@ -271,8 +276,14 @@ export class TaskHub {
           ? (stored.commitAt ?? now)
           : stored.status === "processed"
             ? (stored.processedAt ?? now) + PROCESSED_TTL_MS
-            : null;
-      if (at !== null && (next === null || at < next)) next = at;
+            : stored.status === "pending" &&
+                stored.task.expiresAt !== undefined &&
+                stored.escalatedAt === undefined
+              ? Date.parse(stored.task.expiresAt) || null
+              : null;
+      if (at !== null && Number.isFinite(at) && (next === null || at < next)) {
+        next = at;
+      }
     }
     const current = await this.state.storage.getAlarm();
     if (next === null) {
@@ -306,6 +317,9 @@ export class TaskHub {
         if (reply && stored.task.replyUrl) {
           delivered.push({ key, reply, url: stored.task.replyUrl });
         }
+      } else if (stored.status === "pending") {
+        const decision = expiryDue(stored, now);
+        if (decision) await this.runExpiry(key, stored, decision, now);
       } else if (stored.status === "processed") {
         if ((stored.processedAt ?? 0) < ttlCutoff) doomed.push(key);
       }
@@ -315,5 +329,74 @@ export class TaskHub {
       this.state.waitUntil(this.deliverToAgent(url, reply));
     }
     await this.rescheduleAlarm();
+  }
+
+  /**
+   * Run a card's default behavior at its deadline (I-203). approve /
+   * reject execute the declared swipe binding immediately — nobody is
+   * around to undo, so there is no committing grace window. drop
+   * finishes the task unanswered (the agent still learns via replyUrl).
+   * escalate keeps the card waiting, bumps severity to critical and
+   * re-broadcasts with a rotated nonce (clients replace in place).
+   */
+  private async runExpiry(
+    key: string,
+    stored: StoredTask,
+    decision: ExpiryDecision,
+    now: number,
+  ): Promise<void> {
+    if (decision.action === "escalate") {
+      const task: TaskCardPayload = {
+        ...stored.task,
+        severity: "critical",
+        nonce: `tok_${crypto.randomUUID()}`,
+        expiresAt: undefined,
+        onExpire: undefined,
+      };
+      const updated: StoredTask = {
+        ...stored,
+        task,
+        nonce: task.nonce,
+        escalatedAt: now,
+      };
+      await this.state.storage.put(key, updated);
+      await this.broadcast("createTaskCard", task);
+      return;
+    }
+
+    const reply: ActionReply =
+      decision.action === "drop"
+        ? {
+            taskId: stored.task.taskId,
+            nonce: stored.nonce,
+            actionName: "expire",
+            timestamp: new Date(now).toISOString(),
+            source: "on_expire",
+            data: { decision: "EXPIRED" },
+          }
+        : {
+            taskId: stored.task.taskId,
+            nonce: stored.nonce,
+            actionName: decision.binding!.actionName,
+            timestamp: new Date(now).toISOString(),
+            source: "on_expire",
+            ...(decision.binding!.payload
+              ? { data: decision.binding!.payload }
+              : {}),
+          };
+    const updated: StoredTask = {
+      ...stored,
+      status: "processed",
+      processedAt: now,
+      processedBy: "on_expire",
+    };
+    await this.state.storage.put(key, updated);
+    await this.broadcast("dismissTask", {
+      taskId: stored.task.taskId,
+      by: "on_expire",
+    });
+    if (stored.task.replyUrl) {
+      this.state.waitUntil(this.deliverToAgent(stored.task.replyUrl, reply));
+    }
   }
 }

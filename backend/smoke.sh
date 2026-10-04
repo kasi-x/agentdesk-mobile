@@ -86,4 +86,21 @@ sleep $(( GRACE / 1000 + 2 ))
   -d "{\"taskId\":\"$TASK_ID\",\"nonce\":\"$NEW_NONCE\"}")" = "409" ] \
   || { echo "post-commit undo not rejected" >&2; exit 1; }
 
+echo "→ expiring task is auto-dropped by the hub alarm (I-203)"
+EXP_ID="task_smoke_exp_$(date +%s)"
+EXP_AT=$(node -e 'console.log(new Date(Date.now() + 1500).toISOString())')
+EXP_CODE=$(code -X POST "$BASE/api/v1/tasks" \
+  -H "Authorization: Bearer $AGENT_TOKEN" -H "Content-Type: application/json" \
+  -d "$(jq -n --arg id "$EXP_ID" --arg at "$EXP_AT" '{
+      type: "createTaskCard", taskId: $id,
+      agent: { name: "Smoke Agent" }, summary: "expiry smoke task",
+      components: [], expiresAt: $at, onExpire: "drop"
+    }')")
+[ "$EXP_CODE" = "201" ] || { echo "expiry create failed: $EXP_CODE" >&2; exit 1; }
+sleep 5
+if body "$BASE/api/v1/state" -H "Authorization: Bearer $CLIENT_TOKEN" | grep -q "$EXP_ID"; then
+  echo "expired task still pending" >&2
+  exit 1
+fi
+
 echo "smoke OK ✅"

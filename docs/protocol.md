@@ -30,8 +30,8 @@ Errors: `401` bad/missing token · `400` invalid payload (message says why)
 
 ```
 event: snapshot        data: {"tasks":[TaskCard,...]}   (oldest→newest; sent on every (re)connect)
-event: createTaskCard  data: TaskCard
-event: dismissTask     data: {"taskId":"…","by":"swipe_gesture"}   (FR-3.2: remove from every device)
+event: createTaskCard  data: TaskCard   (a taskId the client already holds means: replace in place — I-203 escalate)
+event: dismissTask     data: {"taskId":"…","by":"swipe_gesture"}   (FR-3.2: remove from every device; by="on_expire" = expiry auto-processed, I-203)
 : ping                                                  (heartbeat comment every 15s)
 ```
 
@@ -111,6 +111,8 @@ Field notes:
 | `components` | req | adjacent list; render order = `TriageCard.children`, else array order |
 | `actions.inspectForm` | opt | bottom-sheet form components (§3.3) |
 | `actions.rejectReasons` | opt | `[{id, label}]` reject reason chips (I-118). The chosen id arrives as `data.reason` on the reply; no choice = reject without a reason. Malformed entries are dropped, non-array is `400` |
+| `expiresAt` | opt | ISO 8601 deadline; the hub runs `onExpire` at it (I-203, see below) |
+| `onExpire` | opt | `approve` \| `reject` \| `escalate` \| `drop` (default `drop`); requires `expiresAt` |
 
 ## Component catalog v0
 
@@ -180,3 +182,40 @@ re-broadcast as `createTaskCard`; clients must use the new nonce for any
 further triage of that task. `409 too_late` once `processed` (or if the
 task was never committing); `409 bad_nonce` / `404` as usual. A second
 action inside the grace window still gets `409 already_processed`.
+
+### Expiry: `expiresAt` / `onExpire` (I-203)
+
+Agents may attach a deadline to a card:
+
+```json
+{ "expiresAt": "2026-10-04T18:00:00Z", "onExpire": "approve" }
+```
+
+| Field | Req | Notes |
+|---|---|---|
+| `expiresAt` | opt | ISO 8601 instant; malformed dates are `400` |
+| `onExpire` | opt | `approve` \| `reject` \| `escalate` \| `drop`; requires `expiresAt`; defaults to the safe `drop` |
+
+At the deadline the hub's unified DO alarm runs the default behavior and
+records it as **automatic** (anti-goal: the agent must never be able to
+forge a human decision):
+
+- `approve` / `reject` — the corresponding swipe binding
+  (`onSwipeRight` / `onSwipeLeft`) is executed immediately, **without**
+  the undo grace window (nobody is present to trigger an undo). The
+  reply reaches `replyUrl` with `source: "on_expire"` and the binding's
+  own `actionName`/`payload`. A missing binding degrades to `drop`.
+- `drop` — the task finishes unanswered; agents still learn via a
+  `replyUrl` delivery of `{"actionName":"expire","source":"on_expire",
+  "data":{"decision":"EXPIRED"}}`.
+- `escalate` — the card keeps waiting but is re-broadcast as
+  `createTaskCard` with `severity: "critical"` and a **rotated nonce**;
+  the deadline is consumed. Clients must treat a `createTaskCard` for a
+  taskId they already hold as a **replace in place** (the hub is the
+  single source of truth, P9).
+
+Every finished expiry (approve / reject / drop) is broadcast as
+`dismissTask {taskId, by: "on_expire"}` — clients show a
+「期限のため自動処理されました」 toast. Clients render a countdown strip
+from `expiresAt` + `onExpire`; it is display-only — the hub decides.
+
