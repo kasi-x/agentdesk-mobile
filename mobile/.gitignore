@@ -1,0 +1,8 @@
+# Fallback ignores; `flutter create` adds its own platform-specific ones.
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+ios/Pods/
+android/.gradle/
