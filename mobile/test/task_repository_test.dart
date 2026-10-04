@@ -22,8 +22,14 @@ class FakeHubApi implements HubApi {
     return ActionSendResult.sent;
   }
 
+  UndoResult undoResult = UndoResult.undone;
+  final List<String> undos = <String>[];
+
   @override
-  Future<UndoResult> sendUndo(String taskId) async => UndoResult.undone;
+  Future<UndoResult> undo({required String taskId, required String nonce}) async {
+    undos.add(taskId);
+    return undoResult;
+  }
 }
 
 TaskCard _task(String id, {String? createdAt}) => TaskCard.fromJson(
@@ -129,24 +135,45 @@ void main() {
     expect(repo.lastToast, contains('別のデバイスで処理されました'));
   });
 
-  test('triage opens an undo window; undoLast calls the hub (I-104)',
+  test('undo after a sent triage calls the hub undo endpoint (I-104)',
       () async {
     final api = FakeHubApi();
     final repo = _repo(api);
     await repo.restoreQueue();
     final task = _task('u1');
     repo.upsert(task);
-    await repo.triage(task,
-        actionName: 'approve', source: ActionSource.swipeGesture);
-    expect(repo.lastUndoneTaskId, 'u1');
-    await repo.undoLast();
-    expect(repo.lastUndoneTaskId, isNull);
+    await repo.triage(task, actionName: 'approve', source: ActionSource.webUi);
+    expect(repo.pendingCount, 0);
+
+    await repo.undo('u1');
+    expect(api.undos, ['u1']);
     expect(repo.lastToast, '元に戻しました');
+    // The card itself is restored by the SSE re-broadcast / next snapshot,
+    // not by the repository fabricating one.
+    expect(repo.pendingCount, 0);
   });
 
-  test('undoLast with no window is a no-op', () async {
+  test('undo a queued offline triage restores the card locally (I-104)',
+      () async {
+    final api = FakeHubApi(failWithNetwork: true);
+    final repo = _repo(api);
+    await repo.restoreQueue();
+    final task = _task('u2');
+    repo.upsert(task);
+    await repo.triage(task, actionName: 'approve', source: ActionSource.webUi);
+    expect(repo.hasQueuedActions, isTrue);
+    expect(repo.pendingCount, 0);
+
+    await repo.undo('u2');
+    expect(repo.hasQueuedActions, isFalse);
+    expect(api.undos, isEmpty); // never reached the hub
+    expect(repo.pendingCount, 1);
+    expect(repo.stack.single.taskId, 'u2');
+  });
+
+  test('undo for an unknown task reports failure and keeps state', () async {
     final repo = _repo(FakeHubApi());
-    await repo.undoLast();
-    expect(repo.lastToast, isNull);
+    await repo.undo('never-triaged');
+    expect(repo.lastToast, contains('元に戻せません'));
   });
 }

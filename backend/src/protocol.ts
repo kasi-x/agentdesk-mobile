@@ -16,22 +16,27 @@ export interface CardComponent {
 
 export interface ActionBinding {
   actionName: string;
-  /** Swipe-overlay verb shown while dragging (I-130), e.g. "返金する $120". */
+  /** Action-specific verb shown while swiping (I-130); clients fall
+   *  back to APPROVE / REJECT when absent. */
   label?: string;
   payload?: Record<string, unknown>;
 }
 
-export interface ImpactCost {
-  amount: number;
-  currency: string;
+/** What accepting this card does (I-202). All fields optional so agents
+ *  can declare as much as they know. */
+export interface CardImpact {
+  /** One line shown as 「承認すると {summary}」 near the card top. */
+  summary?: string;
+  /** false renders a 「取り消し不可」 badge; absent = unknown. */
+  reversible?: boolean;
+  cost?: { amount: number; currency: string };
+  scope?: string;
 }
 
-/** What approving does + whether it can be taken back (I-202, P3/P5). */
-export interface TaskImpact {
-  summary?: string;
-  reversible?: boolean;
-  cost?: ImpactCost;
-  scope?: string;
+/// Agent-supplied candidate for "why was this rejected" (I-118).
+export interface RejectReason {
+  id: string;
+  label: string;
 }
 
 export interface TaskCardActions {
@@ -39,7 +44,9 @@ export interface TaskCardActions {
   onSwipeLeft?: ActionBinding;
   onSwipeUp?: ActionBinding;
   inspectForm?: CardComponent[];
+  rejectReasons?: RejectReason[];
 }
+
 
 export interface TaskCardPayload {
   type: "createTaskCard";
@@ -50,13 +57,12 @@ export interface TaskCardPayload {
   confidenceReasons?: string[];
   severity?: "info" | "warning" | "critical";
   summary: string;
-  /** "承認すると…" + reversible badge (I-202). Optional, old cards omit it. */
-  impact?: TaskImpact;
   surfaceId?: string;
   createdAt: string;
   replyUrl?: string;
   components: CardComponent[];
   actions: TaskCardActions;
+  impact?: CardImpact;
 }
 
 export interface ActionReply {
@@ -68,15 +74,28 @@ export interface ActionReply {
   data?: Record<string, unknown>;
 }
 
+/** `committing` = decision accepted but still inside the undo grace window
+ *  (I-104): not delivered to the agent yet, revertible to `pending`. */
 export type TaskStatus = "pending" | "committing" | "processed";
+
+/** Default undo grace window; the hub may override via `UNDO_GRACE_MS`. */
+export const UNDO_GRACE_MS = 5_000;
+
+export interface UndoRequest {
+  taskId: string;
+  nonce: string;
+}
 
 export interface StoredTask {
   task: TaskCardPayload;
   status: TaskStatus;
   nonce: string;
   createdAt: number;
-  /** Set when status flips to committing (I-104): agent reply + sweep wait. */
+  /** `committing` only: wall time the grace window closes and the
+   *  pending reply is committed. */
   commitAt?: number;
+  /** `committing` only: the reply to forward to `replyUrl` on commit. */
+  pendingReply?: ActionReply;
   processedAt?: number;
   processedBy?: string;
 }
@@ -88,14 +107,17 @@ export type ActionDecision =
   | { kind: "bad_nonce" };
 
 export type UndoDecision =
-  | { kind: "undone" }
+  | { kind: "undo" }
+  | { kind: "conflict"; reason: "too_late" }
   | { kind: "not_found" }
-  | { kind: "too_late" };
+  | { kind: "bad_nonce" };
 
 /**
  * Pure compare-and-swap decision for a triage reply (FR-3.1/FR-3.3).
  * The TaskHub applies this under DO input gates: read → decide → write
- * with nothing else awaited in between.
+ * with nothing else awaited in between. A `committing` task still
+ * answers `already_processed` — its decision is taken, only the
+ * agent delivery is deferred.
  */
 export function decideAction(
   stored: StoredTask | undefined,
@@ -110,35 +132,39 @@ export function decideAction(
 }
 
 /**
- * Pure decision for `POST /api/v1/actions/undo` (I-104). Only a task
- * still inside its Undo grace window (`committing`) can return to
- * `pending`; anything else is `too_late` (processed) or `not_found`.
- * Nonce is intentionally NOT checked: the client holds the consuming
- * nonce and the undo must work even if the card was re-issued.
+ * Revert a `committing` decision back to `pending` (I-104). The same
+ * one-shot nonce that authorized the action authorizes its undo; the
+ * hub then rotates the nonce before re-broadcasting the card. Past the
+ * grace window (or already processed) undo answers `too_late` — callers
+ * cannot distinguish "expired" from "never committing", which is fine:
+ * both mean the reply may already be at the agent.
  */
 export function decideUndo(
   stored: StoredTask | undefined,
+  request: UndoRequest,
 ): UndoDecision {
   if (!stored) return { kind: "not_found" };
-  if (stored.status !== "committing") return { kind: "too_late" };
-  return { kind: "undone" };
+  if (stored.nonce !== request.nonce) return { kind: "bad_nonce" };
+  if (stored.status !== "committing") {
+    return { kind: "conflict", reason: "too_late" };
+  }
+  return { kind: "undo" };
 }
 
-export interface UndoRequest {
-  taskId: string;
-}
-
-/** Validates `POST /api/v1/actions/undo` (I-104): only taskId is required. */
+/** Validates an undo request (same shape the client used for its action). */
 export function validateUndoRequest(
   body: unknown,
 ): ValidationResult<UndoRequest> {
   if (!isRecord(body)) return fail("payload must be a JSON object");
-  if (typeof body.taskId !== "string" || body.taskId.length === 0) {
+  const { taskId, nonce } = body;
+  if (typeof taskId !== "string" || taskId.length === 0) {
     return fail("taskId (string) is required");
   }
-  return { ok: true, value: { taskId: body.taskId } };
+  if (typeof nonce !== "string" || nonce.length === 0) {
+    return fail("nonce (string) is required");
+  }
+  return { ok: true, value: { taskId, nonce } };
 }
-
 
 export type ValidationResult<T> =
   | { ok: true; value: T }
@@ -233,6 +259,47 @@ export function validateTaskCard(
       }
       actions.inspectForm = inspectForm as CardComponent[];
     }
+    // I-118: optional reject reason chips. Entries must carry string
+    // `id` and `label`; malformed entries are dropped, never rejected.
+    const rejectReasons = rawActions.rejectReasons;
+    if (rejectReasons !== undefined) {
+      if (!Array.isArray(rejectReasons)) {
+        return fail("actions.rejectReasons must be an array");
+      }
+      const kept = rejectReasons.filter(
+        (r): r is RejectReason =>
+          isRecord(r) && typeof r.id === "string" && typeof r.label === "string",
+      );
+      if (kept.length > 0) {
+        actions.rejectReasons = kept.map((r) => ({
+          id: r.id,
+          label: r.label,
+        }));
+      }
+    }
+  }
+
+  // I-202: optional structured impact block. Unknown/mistyped fields are
+  // dropped rather than rejected — impact is advisory display data.
+  let impact: CardImpact | undefined;
+  if (isRecord(body.impact)) {
+    const raw = body.impact;
+    impact = {
+      ...(typeof raw.summary === "string" && raw.summary.length > 0
+        ? { summary: raw.summary }
+        : {}),
+      ...(typeof raw.reversible === "boolean"
+        ? { reversible: raw.reversible }
+        : {}),
+      ...(isRecord(raw.cost) &&
+      typeof raw.cost.amount === "number" &&
+      typeof raw.cost.currency === "string"
+        ? { cost: { amount: raw.cost.amount, currency: raw.cost.currency } }
+        : {}),
+      ...(typeof raw.scope === "string" && raw.scope.length > 0
+        ? { scope: raw.scope }
+        : {}),
+    };
   }
 
   const replyUrl = body.replyUrl;
@@ -278,9 +345,9 @@ export function validateTaskCard(
         ? body.createdAt
         : new Date().toISOString(),
     ...(replyUrl !== undefined ? { replyUrl: replyUrl as string } : {}),
-    ...(isRecord(body.impact) ? { impact: body.impact as TaskImpact } : {}),
     components: components as CardComponent[],
     actions,
+    ...(impact !== undefined ? { impact } : {}),
   };
   return { ok: true, value };
 }

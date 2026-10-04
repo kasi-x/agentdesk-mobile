@@ -347,24 +347,13 @@ body {
 .text-caption {
   font-size: 12px;
   color: var(--muted);
-  line-height: 1.5;
+  line-height: 1.6;
 }
 
-.impact {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  background: var(--surface-2);
-  border-radius: 10px;
-  padding: 10px 12px;
-  font-size: 13px;
-}
-
-.impact-text {
-  flex: 1;
+.text-body {
+  font-size: 14px;
   color: var(--text);
-  opacity: 0.85;
-  line-height: 1.5;
+  line-height: 1.6;
 }
 
 .text-title {
@@ -711,20 +700,8 @@ body {
   font-size: 13px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
   animation: toast-in 0.18s ease;
-  display: flex;
-  align-items: center;
-  gap: 12px;
 }
 
-.toast-action {
-  background: transparent;
-  border: none;
-  color: var(--accent);
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-  padding: 0;
-}
 @keyframes toast-in {
   from {
     opacity: 0;
@@ -757,4 +734,112 @@ body {
   .card-meta {
     white-space: normal;
   }
+}
+.toast-undo {
+  margin-left: 12px;
+  background: none;
+  border: none;
+  color: var(--accent, #7aa2f7);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.toast-undo:hover {
+  text-decoration: underline;
+}
+
+/* ---------- impact row (I-202) ---------- */
+.impact-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 2px;
+}
+
+.impact-text {
+  flex: 1 1 100%;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.impact-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid;
+}
+
+.impact-badge.no {
+  color: #ff7b7b;
+  border-color: rgba(255, 123, 123, 0.5);
+  background: rgba(255, 123, 123, 0.12);
+}
+
+.impact-badge.yes {
+  color: #6fd3a0;
+  border-color: rgba(111, 211, 160, 0.5);
+  background: rgba(111, 211, 160, 0.12);
+}
+
+.impact-badge.cost {
+  color: #ffbf60;
+  border-color: rgba(255, 191, 96, 0.5);
+  background: rgba(255, 191, 96, 0.12);
+}
+
+/* ---------- hold-to-confirm (I-102/I-103) ---------- */
+.btn.ok.hold {
+  position: relative;
+  overflow: hidden;
+  border-color: #ff7b7b;
+  color: #ffb0b0;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+.btn.ok.hold.holding {
+  transform: scale(0.97);
+}
+
+.hold-progress {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 92, 92, 0.25);
+  transform-origin: left center;
+  transform: scaleX(0);
+  pointer-events: none;
+}
+
+/* ---------- reject reason chips (I-118) ---------- */
+.reason-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 6px;
+}
+
+.reason-title {
+  font-size: 12px;
+  color: #9aa3b2;
+}
+
+.chip {
+  border: 1px solid #4a5568;
+  background: #2d3748;
+  color: #e2e8f0;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chip.dim {
+  opacity: 0.7;
 }

@@ -50,6 +50,7 @@ TaskCard sampleTask() => TaskCard(
           properties: {'label': '不明な型'},
         ),
       ],
+      impact: null,
     );
 
 void main() {

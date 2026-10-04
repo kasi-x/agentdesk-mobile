@@ -1,4 +1,8 @@
-import { validateActionReply, validateTaskCard, validateUndoRequest } from "./protocol";
+import {
+  validateActionReply,
+  validateTaskCard,
+  validateUndoRequest,
+} from "./protocol";
 import { json } from "./http";
 import type { Env } from "./env";
 
@@ -86,7 +90,6 @@ export default {
             headers: { "content-type": "application/json" },
           },
         );
-        // Same immutable-subresponse rebuild as /actions (Phase 2 fix).
         const res = new Response(await doRes.text(), {
           status: doRes.status,
           headers: { "content-type": "application/json" },

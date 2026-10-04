@@ -22,9 +22,12 @@ class TaskRepository extends ChangeNotifier {
   List<TaskCard> _stack = <TaskCard>[];
   final Set<String> _snoozedIds = <String>{};
   List<TriageActionReply> _queue = <TriageActionReply>[];
+  /// Cards triaged this session, kept for undo (I-104). Insertion order
+  /// = recency; bounded so a long session cannot grow it unboundedly.
+  final Map<String, TaskCard> _undoable = <String, TaskCard>{};
+  static const int _undoableLimit = 30;
   String? _lastToast;
   int _toastSeq = 0;
-
   TaskRepository({required HubConfig config, HubApi? api})
       : _config = config,
         api = api ?? HttpHubApi(config: config);
@@ -37,8 +40,14 @@ class TaskRepository extends ChangeNotifier {
   int get toastSeq => _toastSeq;
 
   /// The UI plugs a snackbar shower in here; [toastSeq] disambiguates
-  /// repeated messages.
-  void Function(String message)? onToast;
+  /// repeated messages. `undoableTaskId` is set when the toast announces
+  /// a triage decision inside the undo grace window (I-104) and the UI
+  /// should offer a "元に戻す" action calling [undo].
+  void Function(String message, {String? undoableTaskId})? onToast;
+
+  /// Fires when the hub reports 409 (task already processed elsewhere).
+  /// The UI maps it to a double haptic tap (I-131).
+  void Function()? onConflict;
 
   // ------------------------------------------------------------------
   // Lifecycle
@@ -116,6 +125,7 @@ class TaskRepository extends ChangeNotifier {
       _stack.removeWhere((t) => t.taskId == reply.taskId);
       if (result == ActionSendResult.conflict) {
         _toast('処理済みのタスクです（別デバイスで承認済み）');
+        onConflict?.call();
       } else if (result == ActionSendResult.rejected) {
         _toast('無効な操作を破棄しました');
       }
@@ -138,6 +148,7 @@ class TaskRepository extends ChangeNotifier {
     required String source,
   }) async {
     remove(task.taskId);
+    _rememberUndoable(task);
     final reply = TriageActionReply(
       taskId: task.taskId,
       nonce: task.nonce,
@@ -146,19 +157,84 @@ class TaskRepository extends ChangeNotifier {
       source: source,
       data: data ?? const <String, dynamic>{},
     );
-    await _deliver(reply);
+    final result = await _deliver(reply);
+    if (result == ActionSendResult.sent) {
+      _toast('$actionName しました', undoableTaskId: task.taskId);
+    } else if (result == ActionSendResult.networkError) {
+      _toast('オフライン: 端末に保存しました（再接続時に送信）',
+          undoableTaskId: task.taskId);
+    }
   }
 
-  Future<void> _deliver(TriageActionReply reply) async {
+  /// Revert a triage decision. While the server-side reply is still in
+  /// the undo grace window the hub restores the card (re-broadcast via
+  /// createTaskCard); a locally queued (offline) reply is simply dropped
+  /// and the card restored here (I-104).
+  Future<void> undo(String taskId) async {
+    final task = _undoable[taskId];
+    if (task == null) {
+      _toast('元に戻せません（この端末では操作していません）');
+      return;
+    }
+    _undoable.remove(taskId);
+
+    // Offline first: our decision may never have left the device.
+    final before = _queue.length;
+    _queue.removeWhere((r) => r.taskId == taskId);
+    if (_queue.length != before) {
+      await _persistQueue();
+      _restore(task);
+      _toast('元に戻しました（送信前の操作を取り消し）');
+      return;
+    }
+
+    final result =
+        await api.undo(taskId: taskId, nonce: task.nonce);
+    switch (result) {
+      case UndoResult.undone:
+        // The hub re-broadcasts the card via SSE; if the stream is down
+        // the next snapshot still restores it (status pending).
+        _toast('元に戻しました');
+        break;
+      case UndoResult.tooLate:
+      case UndoResult.notFound:
+        _toast('元に戻せません（確定済み）');
+        break;
+      case UndoResult.rejected:
+        _toast('元に戻せませんでした ($taskId)');
+        break;
+      case UndoResult.networkError:
+        _undoable[taskId] = task; // keep for a later retry
+        _toast('オフライン: まだ元に戻せていません');
+        break;
+    }
+  }
+
+  void _rememberUndoable(TaskCard task) {
+    _undoable.remove(task.taskId); // re-insert to refresh recency
+    _undoable[task.taskId] = task;
+    while (_undoable.length > _undoableLimit) {
+      _undoable.remove(_undoable.keys.first);
+    }
+  }
+
+  void _restore(TaskCard task) {
+    if (_stack.any((t) => t.taskId == task.taskId)) return;
+    _stack.insert(0, task);
+    notifyListeners();
+  }
+
+
+  /// Delivers a reply, queueing on network failure. Returns the send
+  /// result so callers can tailor their toast (undo offers I-104).
+  Future<ActionSendResult> _deliver(TriageActionReply reply) async {
     final result = await api.sendAction(reply);
     switch (result) {
       case ActionSendResult.sent:
-        _lastUndoneTask = null;
-        _lastUndoneTask = _UndoneTask(taskId: reply.taskId, at: DateTime.now());
-        _toast('処理しました');
         break;
       case ActionSendResult.conflict:
         _toast('処理済みのタスクです（別デバイスで承認済み）');
+        onConflict?.call();
         break;
       case ActionSendResult.rejected:
         _toast('送信が拒否されました (${reply.taskId})');
@@ -166,45 +242,9 @@ class TaskRepository extends ChangeNotifier {
       case ActionSendResult.networkError:
         _queue.add(reply);
         await _persistQueue();
-        _toast('オフライン: 端末に保存しました（再接続時に送信）');
         break;
     }
-  }
-
-  _UndoneTask? _lastUndoneTask;
-
-  /// The most recently triaged task id, while its server grace window
-  /// (I-104) may still be open. Private type stays out of the public API.
-  String? get lastUndoneTaskId => _lastUndoneTask?.taskId;
-
-  void clearUndoWindow() {
-    _lastUndoneTask = null;
-    notifyListeners();
-  }
-
-  /// Ask the hub to revive the last triaged task (I-104). The revived card
-  /// arrives via SSE `createTaskCard`; a late window reports it.
-  Future<void> undoLast() async {
-    final pending = _lastUndoneTask;
-    if (pending == null) return;
-    _lastUndoneTask = null;
-    notifyListeners();
-    final result = await api.sendUndo(pending.taskId);
-    switch (result) {
-      case UndoResult.undone:
-        _toast('元に戻しました');
-        break;
-      case UndoResult.tooLate:
-      case UndoResult.notFound:
-        _toast('取り消し期限を過ぎています');
-        break;
-      case UndoResult.rejected:
-        _toast('取り消しが拒否されました');
-        break;
-      case UndoResult.networkError:
-        _toast('オフライン: 取り消しできませんでした');
-        break;
-    }
+    return result;
   }
 
   /// Client-local snooze: move to the stack tail. Timed re-notification
@@ -288,17 +328,9 @@ class TaskRepository extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _toast(String message) {
+  void _toast(String message, {String? undoableTaskId}) {
     _lastToast = message;
     _toastSeq++;
-    onToast?.call(message);
+    onToast?.call(message, undoableTaskId: undoableTaskId);
   }
-}
-
-/// A triage awaiting the end of its server Undo grace window (I-104).
-class _UndoneTask {
-  final String taskId;
-  final DateTime at;
-
-  _UndoneTask({required this.taskId, required this.at});
 }

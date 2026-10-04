@@ -56,10 +56,15 @@ class TaskCardView extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       _header(context),
-                      if (!task.impact.isEmpty) ...[
-                        const SizedBox(height: 10),
-                        _impactRow(context),
+                      if (task.impact != null) ...[
+                        const SizedBox(height: 8),
+                        _impactRow(),
                       ],
+                      const SizedBox(height: 14),
+                      ConfidenceIndicator(
+                        confidence: task.confidence,
+                        reasons: task.confidenceReasons,
+                      ),
                       const SizedBox(height: 14),
                       for (final component in task.bodyComponents) ...[
                         ComponentRenderer(
@@ -130,6 +135,55 @@ class TaskCardView extends StatelessWidget {
     );
   }
 
+  /// 「承認すると…」+ 可逆性バッジ (I-202)。
+  Widget _impactRow() {
+    final impact = task.impact!;
+    final parts = <Widget>[];
+    if (impact.summary != null) {
+      parts.add(
+        Expanded(
+          child: Text(
+            '承認すると ${impact.summary}',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 12, color: Colors.white70),
+          ),
+        ),
+      );
+    } else {
+      parts.add(const Spacer());
+    }
+    if (impact.reversible == false) {
+      parts.add(_impactBadge('取り消し不可', const Color(0xFFFF5C5C)));
+    } else if (impact.reversible == true) {
+      parts.add(_impactBadge('取り消し可', const Color(0xFF4CAF7D)));
+    }
+    if (impact.costAmount != null && impact.costCurrency != null) {
+      parts.add(_impactBadge(
+        '${impact.costCurrency} ${impact.costAmount}',
+        const Color(0xFFFFB020),
+      ));
+    }
+    return Row(children: parts);
+  }
+
+  Widget _impactBadge(String text, Color color) {
+    return Container(
+      margin: const EdgeInsets.only(left: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.18),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withOpacity(0.5), width: 0.8),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+            fontSize: 10, fontWeight: FontWeight.w700, color: color),
+      ),
+    );
+  }
+
   Widget _severityBadge() {
     final (Color color, String label) = switch (task.severity) {
       'critical' => (const Color(0xFFFF5C5C), 'CRITICAL'),
@@ -155,69 +209,10 @@ class TaskCardView extends StatelessWidget {
     );
   }
 
-  /// "承認すると…" + reversible badge (I-202, P3/P5). Hidden when the
-  /// agent sent no impact — old cards render exactly as before.
-  Widget _impactRow(BuildContext context) {
-    final impact = task.impact;
-    final reversible = impact.reversible;
-    final badgeColor = reversible == null
-        ? Colors.white38
-        : reversible
-            ? const Color(0xFF7BE494)
-            : const Color(0xFFFFB020);
-    final badgeLabel =
-        reversible == null ? null : reversible ? '取り消し可' : '取り消し不可';
-    final parts = <String>[
-      if (impact.summary != null && impact.summary!.isNotEmpty) impact.summary!,
-      if (impact.amount != null) '${impact.currency ?? ''} ${impact.amount}'.trim(),
-      if (impact.scope != null && impact.scope!.isNotEmpty) impact.scope!,
-    ];
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.04),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Text(
-              parts.isEmpty ? '承認すると実行されます' : '承認すると ${parts.join(' / ')}',
-              style: Theme.of(context)
-                  .textTheme
-                  .bodySmall
-                  ?.copyWith(color: Colors.white70, height: 1.4),
-            ),
-          ),
-          if (badgeLabel != null) ...[
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-              decoration: BoxDecoration(
-                color: badgeColor.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: badgeColor.withOpacity(0.4)),
-              ),
-              child: Text(
-                badgeLabel,
-                style: TextStyle(
-                  fontSize: 9,
-                  fontWeight: FontWeight.w800,
-                  color: badgeColor,
-                ),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
   Widget _swipeOverlay() {
     final x = swipePercentX;
     final y = swipePercentY;
+    if (x == 0 && y == 0) return const SizedBox.shrink();
 
     Widget layer;
     if (x.abs() >= y.abs() && x != 0) {

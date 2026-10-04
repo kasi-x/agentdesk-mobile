@@ -6,4 +6,3 @@ build/
 .flutter-plugins-dependencies
 ios/Pods/
 android/.gradle/
-pubspec.lock

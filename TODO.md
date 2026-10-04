@@ -17,38 +17,9 @@
 
 誤操作に強くするのが最優先。スワイプUIの最大の弱点を先に潰す。
 
-- [x] **Undo猶予** (I-104)
-  - [ ] hub: `StoredTask.status` に `committing` を追加。accept 時は `committing` +
-        `commitAt = now + UNDO_GRACE_MS`(既定 5s)、DO alarm で `processed` に確定して
-        replyUrl へ転送。`dismissTask` は `committing` 時点で配信(他端末からは即消える)
-  - [ ] hub: `POST /api/v1/actions/undo {taskId, nonce}` → `committing` なら `pending` に戻し、
-        nonce を作り直して `createTaskCard` を再配信。`processed` 後は `409 too_late`
-  - [ ] alarm を「期限切れ掃除」と「commit 確定」の両方に使うため、次回 alarm 時刻の計算を一本化
-  - [ ] mobile/web: 処理済みトースト(後で I-120 のトレイに置き換え)に「元に戻す」
-  - [ ] vitest: committing→undo / committing→processed / processed→undo=409 / 二重 undo
-  - [ ] protocol.md: 状態遷移図と新エンドポイント
-- [x] **承認すると行・可逆性** (I-202, I-130)
-  - [ ] protocol: `impact: {summary?, reversible?, cost?: {amount, currency}, scope?}` と
-        `actions.onSwipeRight.label` / `onSwipeLeft.label`
-  - [ ] mobile: カード上部に「承認すると…」と可逆性バッジ。スワイプ中のオーバーレイ文言を
-        `label` に(未指定なら従来の APPROVE / REJECT)
-  - [ ] web: 同上
-  - [ ] mock-agent: サンプル3枚に `impact` と `label` を付ける
-- [ ] **リスク連動の重さ** (I-102, I-103)
-  - [ ] クライアント共通の `riskLevel(task)` を定義(critical / reversible=false / cost を入力)
-  - [ ] mobile: 高リスクの先頭カードではスワイプ閾値を伸ばす。flutter_card_swiper の
-        `threshold` が先頭カードごとに変えられるか要調査(不可なら swiper を自前ジェスチャーで包む)
-  - [ ] mobile/web: critical+取り消し不可は右スワイプ無効、長押しリングで承認
-- [ ] **下部アクションバー** (I-134)
-  - [ ] mobile: ✕ / 後で / ✓ を常設(`CardSwiperController.swipe()` を呼ぶだけで動きを揃える)
-  - [ ] 高リスク時は ✓ が長押しリングに変わる
-- [ ] **触覚の文法** (I-131)
-  - [ ] 閾値を越えた瞬間に `selectionClick`、確定で `mediumImpact`、critical 確定で `heavyImpact`、
-        409 で二回短く。今は確定時の `mediumImpact` のみ
 
 ## Next — 捌く量を減らす(P8)と、エージェントへの返事の質
 
-- [ ] **却下理由チップ** (I-118) — `actions.rejectReasons?: [{id,label}]`、返却 `data.reason`
 - [ ] **期限** (I-203) — `expiresAt` / `onExpire`、カウントダウン表示、hub の alarm で既定動作
 - [ ] **並び順を緊急順に** (I-123, I-206) — 今は新しい順固定
 - [ ] **サーバー側スヌーズ** (既知の逸脱) — `POST /api/v1/actions` に `snooze` アクションと `until`、
@@ -96,3 +67,24 @@
 - [x] Phase 2: genui インスペクトフォーム、DiffBox の `rows` / `inline`、Web トリアージUI、
       同一オリジン POST の修正
 - [x] docs/philosophy.md / IDEA.md / TODO.md を作成 (I-404)
+- [x] **Undo猶予** (I-104): `committing` 状態 + `commitAt`、alarm 一本化、
+      `POST /api/v1/actions/undo` (nonce ローテ + 再配信、processed 後は `409 too_late`)、
+      mobile/web の「元に戻す」トースト、vitest + smoke 追加
+- [x] **承認すると行・可逆性** (I-202, I-130): `impact {summary?, reversible?, cost?, scope?}` +
+      `actions.*.label`。mobile はカード上部バッジ + スワイプオーバーレイ文言、
+      web は同バッジ + ボタン文言、mock-agent 3 枚に付与
+- [x] **リスク連動の重さ** (I-102, I-103): 共通 `riskLevel` (normal/high/locked) を
+      task_card.dart と web/app.js に。high = threshold 90、locked (critical + 取り消し不可) =
+      右スワイプ無効 + 長押しリング承認 (mobile `HoldConfirmButton`, web pointer-hold
+      progress, `source: "hold_confirm"`)。flutter_card_swiper は `didUpdateWidget` が
+      `widget.*` を再読するためビルド時差し替えで十分
+- [x] **下部アクションバー** (I-134): ✕/あとで/✓ をカード下に常設、
+      `CardSwiperController.swipe()` でジェスチャーと同じアニメーション。
+      locked 時は ✓ スロットが `HoldConfirmButton` に変わる
+- [x] **触覚の文法** (I-131): 閾値到達で `selectionClick` (`_ThresholdHaptic`,
+      40% 未満でリアーム)、確定 `mediumImpact` / critical `heavyImpact`、
+      409 で `onConflict` → 二連 `selectionClick`
+- [x] **却下理由チップ** (I-118): hub が `actions.rejectReasons` を検証・中継
+      (malformed 捨て、非配列は 400)。mobile は左スワイプ後に `_RejectReasonSheet`
+      (4s 自動確定)、web はインラインチップ + 4s タイムアウト。選択 id は
+      `data.reason` でエージェントに届く (E2E 確認済み: `"reason": "wrong_amount"`)

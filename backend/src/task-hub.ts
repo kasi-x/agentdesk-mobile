@@ -4,6 +4,8 @@ import {
   decideUndo,
   StoredTask,
   TaskCardPayload,
+  UNDO_GRACE_MS,
+  UndoRequest,
 } from "./protocol";
 import { encodeSSE, json, sseHeaders, sleep } from "./http";
 import type { Env } from "./env";
@@ -11,8 +13,11 @@ import type { Env } from "./env";
 const HEARTBEAT_MS = 15_000;
 /** Processed tasks only serve 409 answers for late duplicates. */
 const PROCESSED_TTL_MS = 60 * 60 * 1000;
-/** Undo grace window: triage replies wait this long before reaching the agent (I-104). */
-export const UNDO_GRACE_MS = 5_000;
+
+function parseGraceMs(value: string | undefined): number {
+  const parsed = value === undefined ? NaN : Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : UNDO_GRACE_MS;
+}
 
 /**
  * Single Durable Object (instance name "global") owning all task state
@@ -80,7 +85,7 @@ export class TaskHub {
     const task = (await request.json()) as TaskCardPayload;
     const key = `task:${task.taskId}`;
     const existing = await this.state.storage.get<StoredTask>(key);
-    if (existing && existing.status === "pending") {
+    if (existing && existing.status !== "processed") {
       return json({ error: "duplicate_task", taskId: task.taskId }, 409);
     }
     const stored: StoredTask = {
@@ -115,68 +120,68 @@ export class TaskHub {
       return json({ error: "task_not_found", taskId: reply.taskId }, 404);
     }
 
-    const now = Date.now();
+    // Undo grace (I-104): the card is dismissed on every device now, but
+    // the reply only reaches replyUrl once the commit alarm fires.
+    const commitAt = Date.now() + this.graceMs;
     const updated: StoredTask = {
       ...stored,
       status: "committing",
-      commitAt: now + UNDO_GRACE_MS,
-      processedBy: reply.source,
+      commitAt,
+      pendingReply: reply,
     };
     await this.state.storage.put(key, updated);
-    // Keep the original reply for the delayed agent delivery.
-    await this.state.storage.put(`reply:${reply.taskId}`, reply);
 
     await this.broadcast("dismissTask", {
       taskId: reply.taskId,
       by: reply.source,
     });
-    await this.scheduleNextAlarm();
+    await this.rescheduleAlarm();
     return json({
       ok: true,
       taskId: reply.taskId,
       actionName: reply.actionName,
-      undoableUntil: updated.commitAt,
+      commitAt,
     });
   }
 
-  /**
-   * `POST /undo`: return a committing task to pending with a fresh nonce
-   * and re-broadcast it as a new card (I-104). Input-gated like action().
-   */
   private async undo(request: Request): Promise<Response> {
-    const body = (await request.json()) as { taskId?: unknown };
-    if (typeof body.taskId !== "string" || body.taskId.length === 0) {
-      return json({ error: "invalid_payload", detail: "taskId (string) is required" }, 400);
-    }
-    const key = `task:${body.taskId}`;
+    const req = (await request.json()) as UndoRequest;
+    const key = `task:${req.taskId}`;
+
     const stored = await this.state.storage.get<StoredTask>(key);
-    const decision = decideUndo(stored);
+    const decision = decideUndo(stored, req);
     if (decision.kind === "not_found") {
-      return json({ error: "task_not_found", taskId: body.taskId }, 404);
+      return json({ error: "task_not_found", taskId: req.taskId }, 404);
     }
-    if (decision.kind === "too_late") {
-      return json({ error: "too_late", taskId: body.taskId }, 409);
+    if (decision.kind === "bad_nonce") {
+      return json({ error: "bad_nonce", taskId: req.taskId }, 409);
+    }
+    if (decision.kind === "conflict") {
+      return json({ error: decision.reason, taskId: req.taskId }, 409);
     }
     if (!stored) {
-      return json({ error: "task_not_found", taskId: body.taskId }, 404);
+      return json({ error: "task_not_found", taskId: req.taskId }, 404);
     }
-    const card: TaskCardPayload = {
+
+    // Rotate the nonce so the re-broadcast card gets a fresh one-shot
+    // token — the old nonce must not triage the task a second time.
+    const task: TaskCardPayload = {
       ...stored.task,
-      taskId: stored.task.taskId,
-      nonce: crypto.randomUUID(),
-      createdAt: stored.task.createdAt,
+      nonce: `tok_${crypto.randomUUID()}`,
     };
-    const revived: StoredTask = {
-      task: card,
+    const updated: StoredTask = {
+      ...stored,
+      task,
       status: "pending",
-      nonce: card.nonce,
-      createdAt: stored.createdAt,
+      nonce: task.nonce,
+      commitAt: undefined,
+      pendingReply: undefined,
     };
-    await this.state.storage.put(key, revived);
-    await this.state.storage.delete(`reply:${body.taskId}`);
-    await this.broadcast("createTaskCard", card);
-    await this.scheduleNextAlarm();
-    return json({ ok: true, taskId: body.taskId });
+    await this.state.storage.put(key, updated);
+
+    await this.broadcast("createTaskCard", task);
+    await this.rescheduleAlarm();
+    return json({ ok: true, taskId: req.taskId, nonce: task.nonce });
   }
 
   private async deliverToAgent(
@@ -196,6 +201,10 @@ export class TaskHub {
     } catch (err) {
       console.error(`agent callback ${replyUrl} failed:`, err);
     }
+  }
+
+  private get graceMs(): number {
+    return parseGraceMs(this.env.UNDO_GRACE_MS);
   }
 
   private async pending(): Promise<StoredTask[]> {
@@ -247,65 +256,64 @@ export class TaskHub {
   }
 
   /**
-   * Single alarm computation (I-104): the next deadline is the earliest of
-   * every committing task's commitAt and every processed task's sweep time.
-   * Always recomputed after action/undo so the alarm never lags.
+   * One alarm serves both jobs (I-104): commit deadlines for `committing`
+   * tasks and TTL expiry for `processed` ones. Call after every status
+   * change; it recomputes the next deadline from scratch so commits that
+   * finish early never strand a later alarm.
    */
-  private async scheduleNextAlarm(): Promise<void> {
+  private async rescheduleAlarm(): Promise<void> {
     const now = Date.now();
-    const all = await this.state.storage.list<StoredTask>({ prefix: "task:" });
     let next: number | null = null;
+    const all = await this.state.storage.list<StoredTask>({ prefix: "task:" });
     for (const stored of all.values()) {
-      if (stored.status === "committing" && stored.commitAt !== undefined) {
-        next = next === null ? stored.commitAt : Math.min(next, stored.commitAt);
-      } else if (stored.status === "processed" && stored.processedAt !== undefined) {
-        const sweepAt = stored.processedAt + PROCESSED_TTL_MS;
-        if (sweepAt > now) {
-          next = next === null ? sweepAt : Math.min(next, sweepAt);
-        }
-      }
+      const at =
+        stored.status === "committing"
+          ? (stored.commitAt ?? now)
+          : stored.status === "processed"
+            ? (stored.processedAt ?? now) + PROCESSED_TTL_MS
+            : null;
+      if (at !== null && (next === null || at < next)) next = at;
     }
+    const current = await this.state.storage.getAlarm();
     if (next === null) {
-      await this.state.storage.deleteAlarm();
-    } else {
-      await this.state.storage.setAlarm(Math.max(next, now));
+      if (current !== null) await this.state.storage.deleteAlarm();
+      return;
+    }
+    if (current === null || next < current) {
+      await this.state.storage.setAlarm(next);
     }
   }
 
   async alarm(): Promise<void> {
     const now = Date.now();
+    const ttlCutoff = now - PROCESSED_TTL_MS;
     const all = await this.state.storage.list<StoredTask>({ prefix: "task:" });
-    // 1) Committing tasks past their grace window → processed + agent delivery.
-    for (const [key, stored] of all) {
-      if (stored.status !== "committing") continue;
-      if ((stored.commitAt ?? Number.POSITIVE_INFINITY) > now) continue;
-      const reply = await this.state.storage.get<ActionReply>(`reply:${stored.task.taskId}`);
-      const finalized: StoredTask = {
-        ...stored,
-        status: "processed",
-        commitAt: undefined,
-        processedAt: now,
-      };
-      await this.state.storage.put(key, finalized);
-      await this.state.storage.delete(`reply:${stored.task.taskId}`);
-      if (stored.task.replyUrl && reply) {
-        this.state.waitUntil(this.deliverToAgent(stored.task.replyUrl, reply));
-      }
-    }
-    // 2) Sweep processed tasks older than the TTL.
-    const cutoff = now - PROCESSED_TTL_MS;
     const doomed: string[] = [];
+    const delivered: Array<{ key: string; reply: ActionReply; url: string }> =
+      [];
     for (const [key, stored] of all) {
-      const current = await this.state.storage.get<StoredTask>(key);
-      if (!current || current.status !== "processed") continue;
-      if ((current.processedAt ?? 0) < cutoff) doomed.push(key);
-    }
-    if (doomed.length > 0) {
-      await this.state.storage.delete(doomed);
-      for (const key of doomed) {
-        await this.state.storage.delete(`reply:${key.slice("task:".length)}`);
+      if (stored.status === "committing" && (stored.commitAt ?? 0) <= now) {
+        const updated: StoredTask = {
+          ...stored,
+          status: "processed",
+          processedAt: stored.commitAt ?? now,
+          processedBy: stored.pendingReply?.source,
+          commitAt: undefined,
+          pendingReply: undefined,
+        };
+        await this.state.storage.put(key, updated);
+        const reply = stored.pendingReply;
+        if (reply && stored.task.replyUrl) {
+          delivered.push({ key, reply, url: stored.task.replyUrl });
+        }
+      } else if (stored.status === "processed") {
+        if ((stored.processedAt ?? 0) < ttlCutoff) doomed.push(key);
       }
     }
-    await this.scheduleNextAlarm();
+    if (doomed.length > 0) await this.state.storage.delete(doomed);
+    for (const { reply, url } of delivered) {
+      this.state.waitUntil(this.deliverToAgent(url, reply));
+    }
+    await this.rescheduleAlarm();
   }
 }

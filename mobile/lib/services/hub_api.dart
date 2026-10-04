@@ -15,7 +15,7 @@ enum UndoResult { undone, tooLate, notFound, rejected, networkError }
 abstract class HubApi {
   Future<List<TaskCard>> fetchPendingTasks();
   Future<ActionSendResult> sendAction(TriageActionReply reply);
-  Future<UndoResult> sendUndo(String taskId);
+  Future<UndoResult> undo({required String taskId, required String nonce});
 }
 
 class HttpHubApi implements HubApi {
@@ -68,15 +68,22 @@ class HttpHubApi implements HubApi {
   }
 
   @override
-  Future<UndoResult> sendUndo(String taskId) async {
+  Future<UndoResult> undo({required String taskId, required String nonce}) async {
     try {
       final res = await _client
-          .post(_uri('/actions/undo'),
-              headers: _headers, body: jsonEncode({'taskId': taskId}))
+          .post(
+            _uri('/actions/undo'),
+            headers: _headers,
+            body: jsonEncode(<String, String>{'taskId': taskId, 'nonce': nonce}),
+          )
           .timeout(const Duration(seconds: 10));
       if (res.statusCode == 200) return UndoResult.undone;
       if (res.statusCode == 404) return UndoResult.notFound;
-      if (res.statusCode == 409) return UndoResult.tooLate;
+      if (res.statusCode == 409) {
+        // too_late vs bad_nonce: both mean the undo cannot proceed; the
+        // caller only needs "failed" vs "succeeded".
+        return UndoResult.tooLate;
+      }
       return UndoResult.rejected;
     } on TimeoutException {
       return UndoResult.networkError;

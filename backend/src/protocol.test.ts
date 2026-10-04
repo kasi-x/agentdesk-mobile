@@ -114,35 +114,29 @@ describe("validateTaskCard", () => {
     ).toBe(false);
   });
 
-  it("passes impact and swipe labels through (I-202, I-130)", () => {
-    const result = validateTaskCard({
+  it("passes valid rejectReasons through and drops malformed entries (I-118)", () => {
+    const withReasons = validateTaskCard({
       ...baseCard,
-      impact: {
-        summary: "UserA に返金します",
-        reversible: false,
-        cost: { amount: 120, currency: "USD" },
-        scope: "Stripe",
-      },
       actions: {
-        onSwipeRight: { actionName: "approve", label: "返金する $120" },
-        onSwipeLeft: { actionName: "reject", label: "やめておく" },
+        ...baseCard.actions,
+        rejectReasons: [
+          { id: "time_conflict", label: "時間が合わない" },
+          { id: "bad" }, // dropped: label missing
+          "nope", // dropped: not an object
+        ],
       },
     });
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.value.impact?.summary).toBe("UserA に返金します");
-    expect(result.value.impact?.reversible).toBe(false);
-    expect(result.value.impact?.cost).toEqual({ amount: 120, currency: "USD" });
-    expect(result.value.actions.onSwipeRight?.label).toBe("返金する $120");
-    expect(result.value.actions.onSwipeLeft?.label).toBe("やめておく");
-  });
-
-  it("omits impact and labels when absent (old cards unchanged)", () => {
-    const result = validateTaskCard(baseCard);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.value.impact).toBeUndefined();
-    expect(result.value.actions.onSwipeRight?.label).toBeUndefined();
+    expect(withReasons.ok).toBe(true);
+    if (!withReasons.ok) return;
+    expect(withReasons.value.actions.rejectReasons).toEqual([
+      { id: "time_conflict", label: "時間が合わない" },
+    ]);
+    expect(
+      validateTaskCard({
+        ...baseCard,
+        actions: { ...baseCard.actions, rejectReasons: "oops" },
+      }).ok,
+    ).toBe(false);
   });
 });
 
@@ -234,41 +228,90 @@ describe("decideAction (nonce CAS, FR-3.1/FR-3.3)", () => {
   });
 });
 
-describe("decideUndo + validateUndoRequest (I-104)", () => {
-  it("undoes a committing task", () => {
-    expect(
-      decideUndo(storedFixture({ status: "committing", commitAt: 999 })),
-    ).toEqual({ kind: "undone" });
-  });
-
-  it("rejects undo on a fresh pending task as too_late", () => {
-    expect(decideUndo(storedFixture())).toEqual({ kind: "too_late" });
-  });
-
-  it("rejects undo on a processed task as too_late", () => {
-    expect(
-      decideUndo(storedFixture({ status: "processed", processedAt: 2 })),
-    ).toEqual({ kind: "too_late" });
-  });
-
-  it("rejects double undo: after revive the task is pending again", () => {
-    // Revived tasks come back as pending (fresh nonce) — undo no longer applies.
-    expect(decideUndo(storedFixture({ status: "pending" }))).toEqual({
-      kind: "too_late",
+describe("decideUndo (I-104 grace window)", () => {
+  const committing = () =>
+    storedFixture({
+      status: "committing",
+      commitAt: Date.now() + 5000,
+      pendingReply: {
+        taskId: "task_x",
+        nonce: "tok_1",
+        actionName: "approve",
+        timestamp: "2026-10-04T00:00:00Z",
+        source: "swipe_gesture",
+      },
     });
+
+  it("reverts a committing task", () => {
+    expect(
+      decideUndo(committing(), { taskId: "task_x", nonce: "tok_1" }),
+    ).toEqual({ kind: "undo" });
+  });
+
+  it("answers too_late once processed", () => {
+    const processed = storedFixture({ status: "processed", processedAt: 2 });
+    expect(
+      decideUndo(processed, { taskId: "task_x", nonce: "tok_1" }),
+    ).toEqual({ kind: "conflict", reason: "too_late" });
+  });
+
+  it("answers too_late on a still-pending task (nothing to undo)", () => {
+    expect(
+      decideUndo(storedFixture(), { taskId: "task_x", nonce: "tok_1" }),
+    ).toEqual({ kind: "conflict", reason: "too_late" });
+  });
+
+  it("rejects a stale nonce before checking status", () => {
+    expect(
+      decideUndo(committing(), { taskId: "task_x", nonce: "tok_other" }),
+    ).toEqual({ kind: "bad_nonce" });
+  });
+
+  it("double undo: second call sees pending and gets too_late", () => {
+    // The hub rotates the nonce and flips to pending after the first undo,
+    // so a replayed request hits the same too_late path as never-committed.
+    const reverted = storedFixture(); // pending with a fresh nonce
+    expect(
+      decideUndo(reverted, { taskId: "task_x", nonce: "tok_1" }),
+    ).toEqual({ kind: "conflict", reason: "too_late" });
   });
 
   it("reports not_found for unknown tasks", () => {
-    expect(decideUndo(undefined)).toEqual({ kind: "not_found" });
+    expect(decideUndo(undefined, { taskId: "task_x", nonce: "tok_1" })).toEqual({
+      kind: "not_found",
+    });
+  });
+});
+
+describe("validateUndoRequest", () => {
+  it("accepts taskId + nonce", () => {
+    expect(validateUndoRequest({ taskId: "t", nonce: "n" })).toEqual({
+      ok: true,
+      value: { taskId: "t", nonce: "n" },
+    });
   });
 
-  it("validates the undo request body", () => {
-    expect(validateUndoRequest({ taskId: "task_x" })).toEqual({
-      ok: true,
-      value: { taskId: "task_x" },
-    });
-    expect(validateUndoRequest({}).ok).toBe(false);
-    expect(validateUndoRequest({ taskId: "" }).ok).toBe(false);
+  it("rejects missing fields and non-objects", () => {
+    expect(validateUndoRequest({ nonce: "n" }).ok).toBe(false);
+    expect(validateUndoRequest({ taskId: "t" }).ok).toBe(false);
     expect(validateUndoRequest(null).ok).toBe(false);
+  });
+});
+
+describe("decideAction under committing (I-104)", () => {
+  it("a second action during the grace window is already_processed", () => {
+    const committing = storedFixture({
+      status: "committing",
+      commitAt: Date.now() + 5000,
+    });
+    expect(
+      decideAction(committing, {
+        taskId: "task_x",
+        nonce: "tok_1",
+        actionName: "reject",
+        timestamp: "2026-10-04T00:00:00Z",
+        source: "web_ui",
+      }),
+    ).toEqual({ kind: "conflict", reason: "already_processed" });
   });
 });

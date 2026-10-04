@@ -51,4 +51,39 @@ echo "→ replayed action rejected with 409 (nonce consumed)"
   -H "Authorization: Bearer $CLIENT_TOKEN" -H "Content-Type: application/json" \
   -d "$ACTION")" = "409" ] || { echo "double-submit not rejected" >&2; exit 1; }
 
+echo "→ undo restores the task with a fresh nonce (I-104)"
+UNDO_CODE=$(code -X POST "$BASE/api/v1/actions/undo" \
+  -H "Authorization: Bearer $CLIENT_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"taskId\":\"$TASK_ID\",\"nonce\":\"$NONCE\"}")
+[ "$UNDO_CODE" = "200" ] || { echo "undo failed: $UNDO_CODE" >&2; exit 1; }
+body "$BASE/api/v1/state" -H "Authorization: Bearer $CLIENT_TOKEN" | grep -q "$TASK_ID" \
+  || { echo "undo did not restore $TASK_ID" >&2; exit 1; }
+
+echo "→ second undo is rejected (already reverted)"
+[ "$(code -X POST "$BASE/api/v1/actions/undo" \
+  -H "Authorization: Bearer $CLIENT_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"taskId\":\"$TASK_ID\",\"nonce\":\"$NONCE\"}")" = "409" ] \
+  || { echo "double undo not rejected" >&2; exit 1; }
+
+echo "→ stale nonce no longer applies after undo (nonce rotated)"
+NEW_NONCE=$(body "$BASE/api/v1/state" -H "Authorization: Bearer $CLIENT_TOKEN" \
+  | jq -r --arg id "$TASK_ID" '.tasks[] | select(.taskId==$id) | .nonce')
+[ -n "$NEW_NONCE" ] && [ "$NEW_NONCE" != "$NONCE" ] \
+  || { echo "nonce not rotated after undo" >&2; exit 1; }
+[ "$(code -X POST "$BASE/api/v1/actions" \
+  -H "Authorization: Bearer $CLIENT_TOKEN" -H "Content-Type: application/json" \
+  -d "$ACTION")" = "409" ] || { echo "stale nonce not rejected" >&2; exit 1; }
+
+echo "→ re-triage with the rotated nonce commits, then undo is too_late"
+[ "$(code -X POST "$BASE/api/v1/actions" \
+  -H "Authorization: Bearer $CLIENT_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"taskId\":\"$TASK_ID\",\"nonce\":\"$NEW_NONCE\",\"actionName\":\"approve\",\"source\":\"web_ui\",\"data\":{\"decision\":\"ACCEPT\"}}")" = "200" ] \
+  || { echo "re-triage failed" >&2; exit 1; }
+GRACE="${UNDO_GRACE_MS:-5000}"
+sleep $(( GRACE / 1000 + 2 ))
+[ "$(code -X POST "$BASE/api/v1/actions/undo" \
+  -H "Authorization: Bearer $CLIENT_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"taskId\":\"$TASK_ID\",\"nonce\":\"$NEW_NONCE\"}")" = "409" ] \
+  || { echo "post-commit undo not rejected" >&2; exit 1; }
+
 echo "smoke OK ✅"

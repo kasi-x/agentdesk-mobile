@@ -55,10 +55,15 @@ function sampleCards(callbackBase) {
       actions: {
         onSwipeRight: {
           actionName: "approve",
-          label: "日程を変更する",
+          label: "16:30 に変更する",
           payload: { decision: "ACCEPT", newTime: "2026-10-05 16:30" },
         },
-        onSwipeLeft: { actionName: "reject", payload: { decision: "DECLINE" } },
+        onSwipeLeft: { actionName: "reject", label: "却下", payload: { decision: "DECLINE" } },
+        rejectReasons: [
+          { id: "time_conflict", label: "時間が合わない" },
+          { id: "not_needed", label: "そもそも不要" },
+          { id: "handle_myself", label: "自分で対応する" },
+        ],
         inspectForm: [
           {
             id: "time_picker",
@@ -67,21 +72,19 @@ function sampleCards(callbackBase) {
           },
         ],
       },
+      impact: {
+        summary: "定例ミーティングを 16:30 に変更して全員に通知します",
+        reversible: true,
+      },
     },
     {
       type: "createTaskCard",
       taskId: shortId(),
       agent: { name: "Billing Agent" },
       confidence: 0.62,
-      severity: "warning",
+      severity: "critical",
       confidenceReasons: ["返金額が$100超", "対象ユーザーの異議申立履歴あり"],
       summary: "Stripe返金の承認依頼",
-      impact: {
-        summary: "UserA に $120.00 を返金します",
-        reversible: false,
-        cost: { amount: 120, currency: "USD" },
-        scope: "Stripe",
-      },
       replyUrl: `${callbackBase}/callback/billing`,
       components: [
         {
@@ -104,12 +107,12 @@ function sampleCards(callbackBase) {
         },
       ],
       actions: {
-        onSwipeRight: {
-          actionName: "approve",
-          label: "返金する $120",
-          payload: { decision: "REFUND", amount: 120 },
-        },
-        onSwipeLeft: { actionName: "reject", payload: { decision: "DENY" } },
+        onSwipeRight: { actionName: "approve", label: "$120 を返金する", payload: { decision: "REFUND", amount: 120 } },
+        onSwipeLeft: { actionName: "reject", label: "拒否", payload: { decision: "DENY" } },
+        rejectReasons: [
+          { id: "wrong_amount", label: "金額が違う" },
+          { id: "contact_user", label: "先に利用者へ連絡" },
+        ],
         inspectForm: [
           {
             id: "amount",
@@ -122,6 +125,12 @@ function sampleCards(callbackBase) {
             properties: { label: "対応メモ", multiline: true },
           },
         ],
+      },
+      impact: {
+        summary: "Stripe で $120.00 を返金します",
+        reversible: false,
+        cost: { amount: 120, currency: "USD" },
+        scope: "UserA の請求 1 件",
       },
     },
     {
@@ -154,8 +163,12 @@ function sampleCards(callbackBase) {
         },
       ],
       actions: {
-        onSwipeRight: { actionName: "delete_and_report", payload: { decision: "DELETE" } },
-        onSwipeLeft: { actionName: "keep", payload: { decision: "KEEP" } },
+        onSwipeRight: { actionName: "delete_and_report", label: "削除して報告", payload: { decision: "DELETE" } },
+        onSwipeLeft: { actionName: "keep", label: "残す", payload: { decision: "KEEP" } },
+      },
+      impact: {
+        summary: "このメールを削除し、迷惑メールとして報告します",
+        reversible: true,
       },
     },
   ];

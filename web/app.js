@@ -16,6 +16,16 @@ const BACKOFF_INIT_MS = 1000;
 const BACKOFF_MAX_MS = 30_000;
 const TOAST_MS = 3000;
 
+/** Risk levels mirror mobile task_card.dart (I-102). */
+function riskLevel(task) {
+  const impact = task.impact || {};
+  const irreversible = impact.reversible === false;
+  if (task.severity === 'critical' && irreversible) return 'locked';
+  if (task.severity === 'critical' || irreversible ||
+      (impact.cost && impact.cost.amount > 0)) return 'high';
+  return 'normal';
+}
+
 /* ---------------- state ---------------- */
 
 /** Newest-first pending stack; snoozed tasks sit at the tail. */
@@ -29,6 +39,7 @@ const state = {
   backoff: BACKOFF_INIT_MS,
   reconnectTimer: null,
   inspectTask: null, // TaskCard currently open in the sheet
+  undoable: new Map(), // taskId → task; cards triaged this session (I-104)
 };
 
 function readJson(key, fallback) {
@@ -61,32 +72,19 @@ function clear(node) {
   node.textContent = '';
 }
 
-function toast(message, action) {
-  const box = document.getElementById('toasts');
+function toast(message, { undoTaskId } = {}) {
   const t = el('div', 'toast', message);
-  if (action && action.label && typeof action.onClick === 'function') {
-    const btn = el('button', 'toast-action', action.label);
+  if (undoTaskId) {
+    const btn = el('button', 'toast-undo', '元に戻す');
     btn.type = 'button';
-    btn.addEventListener('click', () => {
-      action.onClick();
+    btn.onclick = () => {
       t.remove();
-    });
+      undo(undoTaskId);
+    };
     t.appendChild(btn);
   }
-  box.appendChild(t);
-  setTimeout(() => t.remove(), action ? TOAST_MS + 2000 : TOAST_MS);
-}
-
-async function postUndo(taskId) {
-  const res = await fetch(apiUrl('/api/v1/actions/undo'), {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify({ taskId }),
-  });
-  if (res.ok) return 'undone';
-  if (res.status === 404) return 'not_found';
-  if (res.status === 409) return 'too_late';
-  throw new Error(`undo ${res.status}`);
+  document.getElementById('toasts').appendChild(t);
+  setTimeout(() => t.remove(), undoTaskId ? 5000 : TOAST_MS);
 }
 
 /* ---------------- API ---------------- */
@@ -118,10 +116,68 @@ async function postAction(reply) {
   throw new Error(`action ${res.status}`);
 }
 
+/** POST an undo request. Returns 'ok' | 'too_late' | 'not_found' | throws. */
+async function postUndo(taskId, nonce) {
+  const res = await fetch(apiUrl('/api/v1/actions/undo'), {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ taskId, nonce }),
+  });
+  if (res.ok) return 'ok';
+  if (res.status === 409) return 'too_late'; // too_late or bad_nonce
+  if (res.status === 404) return 'not_found';
+  throw new Error(`undo ${res.status}`);
+}
+
+const UNDOABLE_LIMIT = 30;
+
+function rememberUndoable(task) {
+  state.undoable.delete(task.taskId); // refresh recency
+  state.undoable.set(task.taskId, task);
+  while (state.undoable.size > UNDOABLE_LIMIT) {
+    state.undoable.delete(state.undoable.keys().next().value);
+  }
+}
+
+/**
+ * Revert a triage decision (I-104). Offline-queued decisions are dropped
+ * locally; sent ones ask the hub, which re-broadcasts the card via
+ * createTaskCard (next snapshot restores it regardless).
+ */
+async function undo(taskId) {
+  const task = state.undoable.get(taskId);
+  if (!task) {
+    toast('元に戻せません（この端末では操作していません）');
+    return;
+  }
+  state.undoable.delete(taskId);
+  const qi = state.queue.findIndex((r) => r.taskId === taskId);
+  if (qi >= 0) {
+    state.queue.splice(qi, 1);
+    persistQueue();
+    state.stack.unshift(task);
+    render();
+    toast('元に戻しました（送信前の操作を取り消し）');
+    return;
+  }
+  try {
+    const result = await postUndo(taskId, task.nonce);
+    if (result === 'ok') {
+      toast('元に戻しました');
+    } else {
+      toast('元に戻せません（確定済み）');
+    }
+  } catch {
+    state.undoable.set(taskId, task); // keep for a later retry
+    toast('オフライン: まだ元に戻せていません');
+  }
+}
+
 /* ---------------- optimistic triage (FR-2.1/2.2/2.3) ---------------- */
 
 function triage(task, { actionName, data, source }) {
   removeFromStack(task.taskId);
+  rememberUndoable(task);
   render();
   const reply = {
     taskId: task.taskId,
@@ -130,35 +186,24 @@ function triage(task, { actionName, data, source }) {
     source,
     data: data || {},
   };
-  deliver(reply);
+  deliver(reply, task);
 }
 
-async function deliver(reply) {
+async function deliver(reply, task) {
   try {
     const result = await postAction(reply);
-    if (result === 'conflict') {
+    if (result === 'ok') {
+      toast(`${reply.actionName} しました`, { undoTaskId: task.taskId });
+    } else if (result === 'conflict') {
       toast('処理済み — このタスクはすでに別デバイスで処理されています');
     } else if (result === 'not_found') {
       toast('タスクが見つかりません');
-    } else {
-      // Undo grace (I-104): the hub holds the reply ~5s before delivery.
-      toast('処理しました', {
-        label: '元に戻す',
-        onClick: async () => {
-          try {
-            const undo = await postUndo(reply.taskId);
-            toast(undo === 'undone' ? '元に戻しました' : '取り消し期限を過ぎています');
-          } catch {
-            toast('オフライン: 取り消しできませんでした');
-          }
-        },
-      });
     }
   } catch {
     // Offline / 5xx: persist FIFO (FR-2.3); snapshot sync excludes queued ids.
     state.queue.push(reply);
     persistQueue();
-    toast('オフライン: 操作をキューに保存しました');
+    toast('オフライン: 操作をキューに保存しました', { undoTaskId: task.taskId });
     render();
   }
 }
@@ -209,8 +254,8 @@ function applySnapshot(tasks) {
 }
 
 function snooze(task) {
-  const id = typeof task === 'string' ? task : task.taskId;
-  const i = state.stack.findIndex((t) => t.taskId === id);
+  const i = state.stack.findIndex((t) => t.taskId === taskId);
+  if (i < 0) return;
   const [t] = state.stack.splice(i, 1);
   state.snoozedIds.add(t.taskId);
   persistSnoozed();
@@ -430,6 +475,22 @@ function renderCard(task) {
   const sev = task.severity === 'critical' ? 'critical' : task.severity === 'warning' ? 'warning' : 'info';
   header.appendChild(el('span', `badge ${sev}`, sev));
   inner.appendChild(header);
+  // Impact row: 「承認すると…」+ reversibility / cost badges (I-202).
+  const impact = task.impact;
+  if (impact && typeof impact === 'object') {
+    const row = el('div', 'impact-row');
+    if (typeof impact.summary === 'string' && impact.summary) {
+      row.appendChild(el('span', 'impact-text', `承認すると ${impact.summary}`));
+    }
+    const impactBadge = (text, cls) => row.appendChild(el('span', `impact-badge ${cls}`, text));
+    if (impact.reversible === false) impactBadge('取り消し不可', 'no');
+    else if (impact.reversible === true) impactBadge('取り消し可', 'yes');
+    if (impact.cost && typeof impact.cost === 'object' &&
+        typeof impact.cost.amount === 'number' && impact.cost.currency) {
+      impactBadge(`${impact.cost.currency} ${impact.cost.amount}`, 'cost');
+    }
+    inner.appendChild(row);
+  }
 
   // Confidence indicator.
   if (typeof task.confidence === 'number') {
@@ -452,50 +513,97 @@ function renderCard(task) {
 
   inner.appendChild(el('div', 'summary', task.summary || ''));
 
-  // "承認すると…" + reversible badge (I-202). Hidden when no impact.
-  if (task.impact && typeof task.impact === 'object') {
-    const imp = task.impact;
-    const parts = [];
-    if (typeof imp.summary === 'string' && imp.summary) parts.push(imp.summary);
-    if (imp.cost && typeof imp.cost.amount === 'number') {
-      parts.push(`${imp.cost.currency || ''} ${imp.cost.amount}`.trim());
-    }
-    if (typeof imp.scope === 'string' && imp.scope) parts.push(imp.scope);
-    if (parts.length || imp.reversible === true || imp.reversible === false) {
-      const row = el('div', 'impact');
-      row.appendChild(el(
-        'div',
-        'impact-text',
-        parts.length ? `承認すると ${parts.join(' / ')}` : '承認すると実行されます',
-      ));
-      if (imp.reversible === true || imp.reversible === false) {
-        row.appendChild(el(
-          'span',
-          imp.reversible ? 'badge info' : 'badge warning',
-          imp.reversible ? '取り消し可' : '取り消し不可',
-        ));
-      }
-      inner.appendChild(row);
-    }
-  }
-
+  for (const comp of orderedComponents(task)) inner.appendChild(renderComponent(comp, task));
+  card.appendChild(inner);
 
   // Actions row.
   const actions = el('div', 'card-actions');
   const right = task.actions && task.actions.onSwipeRight;
   const left = task.actions && task.actions.onSwipeLeft;
 
-  const approve = el('button', 'btn ok', '✓ Approve');
+  const approve = el('button', 'btn ok', `✓ ${(right && right.label) || 'Approve'}`);
   approve.type = 'button';
   approve.addEventListener('click', () =>
     triage(task, { actionName: (right && right.actionName) || 'approve', data: right && right.payload, source: 'web_ui' }),
   );
 
-  const reject = el('button', 'btn no', '✕ Reject');
+  // Reject reason chips (I-118): when the agent supplied candidates,
+  // expand them inline; ignoring them (timeout) rejects without a reason.
+  const rejectReasons = (task.actions && task.actions.rejectReasons) || [];
+  let reasonTimer = null;
+  const sendReject = (reasonId) => {
+    clearTimeout(reasonTimer);
+    const data = Object.assign({}, (left && left.payload) || {});
+    if (reasonId != null) data.reason = reasonId;
+    triage(task, {
+      actionName: (left && left.actionName) || 'reject',
+      data,
+      source: 'web_ui',
+    });
+  };
+  const reject = el('button', 'btn no', `✕ ${(left && left.label) || 'Reject'}`);
   reject.type = 'button';
-  reject.addEventListener('click', () =>
-    triage(task, { actionName: (left && left.actionName) || 'reject', data: left && left.payload, source: 'web_ui' }),
-  );
+  if (rejectReasons.length) {
+    reject.addEventListener('click', () => {
+      reject.style.display = 'none';
+      const row = el('div', 'reason-chips');
+      row.appendChild(el('span', 'reason-title', '理由 (任意):'));
+      for (const r of rejectReasons) {
+        const chip = el('button', 'chip', r.label || '?');
+        chip.type = 'button';
+        chip.addEventListener('click', (e) => { e.stopPropagation(); sendReject(r.id); });
+        row.appendChild(chip);
+      }
+      const skip = el('button', 'chip dim', '理由なし');
+      skip.type = 'button';
+      skip.addEventListener('click', (e) => { e.stopPropagation(); sendReject(null); });
+      row.appendChild(skip);
+      actions.appendChild(row);
+      reasonTimer = setTimeout(() => sendReject(null), 4000);
+    });
+  } else {
+    reject.addEventListener('click', () => sendReject(null));
+  }
+  actions.appendChild(approve);
+
+  // Locked (critical + irreversible): approve becomes a hold-to-confirm
+  // ring (I-102/I-103). Pointer press fills it; early release cancels.
+  if (riskLevel(task) === 'locked') {
+    approve.textContent = `🔒 ${(right && right.label) || '長押しで承認'}`;
+    approve.classList.add('hold');
+    let holdTimer = null;
+    let progress = null;
+    const HOLD_MS = 1200;
+    approve.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      approve.classList.add('holding');
+      progress = el('span', 'hold-progress');
+      approve.appendChild(progress);
+      progress.animate(
+        [{ transform: 'scaleX(0)' }, { transform: 'scaleX(1)' }],
+        { duration: HOLD_MS, fill: 'forwards' },
+      );
+      holdTimer = setTimeout(() => {
+        cleanup();
+        triage(task, {
+          actionName: (right && right.actionName) || 'approve',
+          data: right && right.payload,
+          source: 'hold_confirm',
+        });
+      }, HOLD_MS);
+    });
+    const cleanup = () => {
+      clearTimeout(holdTimer);
+      holdTimer = null;
+      approve.classList.remove('holding');
+      progress?.remove();
+      progress = null;
+    };
+    approve.addEventListener('pointerup', cleanup);
+    approve.addEventListener('pointerleave', cleanup);
+    approve.addEventListener('pointercancel', cleanup);
+    approve.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
 
   const inspect = el('button', 'btn primary', 'Inspect');
   inspect.type = 'button';
@@ -505,8 +613,7 @@ function renderCard(task) {
   snz.type = 'button';
   snz.addEventListener('click', () => snooze(task));
 
-  actions.append(reject, approve, inspect, snz);
-  card.appendChild(inner);
+  actions.append(reject, inspect, snz);
   card.appendChild(actions);
   return card;
 }

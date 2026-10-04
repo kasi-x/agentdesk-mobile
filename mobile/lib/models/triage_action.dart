@@ -48,4 +48,6 @@ abstract final class ActionSource {
   static const String lockScreen = 'lock_screen';
   static const String webUi = 'web_ui';
   static const String snoozeLocal = 'snooze_local';
+  /// Hold-to-confirm ring on locked cards (I-103).
+  static const String holdConfirm = 'hold_confirm';
 }

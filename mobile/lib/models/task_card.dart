@@ -55,6 +55,8 @@ class CardComponent {
 
 class ActionBinding {
   final String actionName;
+  /// Action-specific verb shown while swiping (I-130); null falls back
+  /// to APPROVE / REJECT.
   final String? label;
   final Map<String, dynamic> payload;
 
@@ -66,10 +68,11 @@ class ActionBinding {
 
   factory ActionBinding.fromJson(dynamic raw) {
     if (raw is! Map) return const ActionBinding(actionName: 'unknown');
-    final label = raw['label'];
     return ActionBinding(
       actionName: (raw['actionName'] as String?) ?? 'unknown',
-      label: label is String && label.isNotEmpty ? label : null,
+      label: (raw['label'] as String?)?.isNotEmpty == true
+          ? raw['label'] as String
+          : null,
       payload: raw['payload'] is Map
           ? Map<String, dynamic>.from(raw['payload'] as Map)
           : const <String, dynamic>{},
@@ -77,54 +80,60 @@ class ActionBinding {
   }
 }
 
-/// What approving does + whether it can be taken back (I-202, P3/P5).
-/// Optional — old cards omit it and clients hide the row.
-class TaskImpact {
+/// Agent-supplied candidate for "why was this rejected" (I-118).
+class RejectReason {
+  final String id;
+  final String label;
+
+  const RejectReason({required this.id, required this.label});
+
+  factory RejectReason.fromJson(dynamic raw) {
+    if (raw is! Map) {
+      return const RejectReason(id: 'unknown', label: '?');
+    }
+    return RejectReason(
+      id: (raw['id'] as String?) ?? 'unknown',
+      label: (raw['label'] as String?)?.isNotEmpty == true
+          ? raw['label'] as String
+          : '?',
+    );
+  }
+}
+
+/// What accepting this card does (I-202). All fields optional.
+class CardImpact {
   final String? summary;
+  /// null = unknown; false renders a 「取り消し不可」 badge.
   final bool? reversible;
-  final num? amount;
-  final String? currency;
+  final double? costAmount;
+  final String? costCurrency;
   final String? scope;
 
-  const TaskImpact({
+  const CardImpact({
     this.summary,
     this.reversible,
-    this.amount,
-    this.currency,
+    this.costAmount,
+    this.costCurrency,
     this.scope,
   });
 
-  factory TaskImpact.fromJson(dynamic raw) {
-    if (raw is! Map) return const TaskImpact();
+  factory CardImpact.fromJson(dynamic raw) {
+    if (raw is! Map) return const CardImpact();
     final cost = raw['cost'];
-    return TaskImpact(
-      summary: raw['summary'] is String ? raw['summary'] as String : null,
+    return CardImpact(
+      summary: (raw['summary'] as String?)?.isNotEmpty == true
+          ? raw['summary'] as String
+          : null,
       reversible: raw['reversible'] is bool ? raw['reversible'] as bool : null,
-      amount: cost is Map && cost['amount'] is num ? cost['amount'] as num : null,
-      currency:
-          cost is Map && cost['currency'] is String ? cost['currency'] as String : null,
-      scope: raw['scope'] is String ? raw['scope'] as String : null,
+      costAmount:
+          cost is Map ? (cost['amount'] as num?)?.toDouble() : null,
+      costCurrency:
+          cost is Map ? (cost['currency'] as String?) : null,
+      scope: (raw['scope'] as String?)?.isNotEmpty == true
+          ? raw['scope'] as String
+          : null,
     );
   }
-
-  bool get isEmpty =>
-      summary == null && reversible == null && amount == null && scope == null;
-}
-
-/// Risk tier driving swipe weight, haptics, and the action bar (I-102, P2).
-/// Pure client-side derivation from wire fields — no protocol change.
-enum RiskLevel { low, high, critical }
-
-/// High risk: critical severity, irreversible impact, or a declared cost
-/// at/above [highCostThreshold]. Critical risk: critical AND irreversible.
-RiskLevel riskLevel(TaskCard task, {num highCostThreshold = 100}) {
-  final irreversible = task.impact.reversible == false;
-  final costly =
-      task.impact.amount != null && task.impact.amount! >= highCostThreshold;
-  final critical = task.severity == 'critical';
-  if (critical && (irreversible || costly)) return RiskLevel.critical;
-  if (critical || irreversible || costly) return RiskLevel.high;
-  return RiskLevel.low;
 }
 
 class TaskCard {
@@ -135,7 +144,6 @@ class TaskCard {
   final List<String> confidenceReasons;
   final String severity;
   final String summary;
-  final TaskImpact impact;
   final String? surfaceId;
   final DateTime createdAt;
   final String? replyUrl;
@@ -143,6 +151,11 @@ class TaskCard {
   final ActionBinding? onSwipeRight;
   final ActionBinding? onSwipeLeft;
   final List<CardComponent> inspectForm;
+  final CardImpact? impact;
+  /// Agent-supplied reject reasons (I-118). On left swipe the client
+  /// offers them as one-tap chips; the chosen id is sent as
+  /// `data.reason`.
+  final List<RejectReason> rejectReasons;
 
   const TaskCard({
     required this.taskId,
@@ -152,7 +165,6 @@ class TaskCard {
     required this.confidenceReasons,
     required this.severity,
     required this.summary,
-    this.impact = const TaskImpact(),
     required this.surfaceId,
     required this.createdAt,
     required this.replyUrl,
@@ -160,6 +172,8 @@ class TaskCard {
     required this.onSwipeRight,
     required this.onSwipeLeft,
     required this.inspectForm,
+    required this.impact,
+    this.rejectReasons = const <RejectReason>[],
   });
 
   factory TaskCard.fromJson(dynamic raw) {
@@ -180,7 +194,6 @@ class TaskCard {
           : const <String>[],
       severity: (raw['severity'] as String?) ?? 'info',
       summary: (raw['summary'] as String?) ?? '(no summary)',
-      impact: TaskImpact.fromJson(raw['impact']),
       surfaceId: raw['surfaceId'] as String?,
       createdAt: createdAt,
       replyUrl: raw['replyUrl'] as String?,
@@ -196,6 +209,14 @@ class TaskCard {
       inspectForm: actions['inspectForm'] is List
           ? (actions['inspectForm'] as List).map(CardComponent.fromJson).toList()
           : const <CardComponent>[],
+      impact: raw['impact'] is Map
+          ? CardImpact.fromJson(raw['impact'])
+          : null,
+      rejectReasons: actions['rejectReasons'] is List
+          ? (actions['rejectReasons'] as List)
+              .map(RejectReason.fromJson)
+              .toList()
+          : const <RejectReason>[],
     );
   }
 
@@ -231,17 +252,7 @@ class TaskCard {
         'confidenceReasons': confidenceReasons,
         'severity': severity,
         'summary': summary,
-        if (!impact.isEmpty)
-          'impact': <String, dynamic>{
-            if (impact.summary != null) 'summary': impact.summary,
-            if (impact.reversible != null) 'reversible': impact.reversible,
-            if (impact.amount != null)
-              'cost': <String, dynamic>{
-                'amount': impact.amount,
-                if (impact.currency != null) 'currency': impact.currency,
-              },
-            if (impact.scope != null) 'scope': impact.scope,
-          },
+        if (surfaceId != null) 'surfaceId': surfaceId,
         'createdAt': createdAt.toUtc().toIso8601String(),
         if (replyUrl != null) 'replyUrl': replyUrl,
         'components': components
@@ -273,5 +284,43 @@ class TaskCard {
                   })
               .toList(),
         },
+        if (impact != null)
+          'impact': <String, dynamic>{
+            if (impact!.summary != null) 'summary': impact!.summary,
+            if (impact!.reversible != null) 'reversible': impact!.reversible,
+            if (impact!.costAmount != null && impact!.costCurrency != null)
+              'cost': <String, dynamic>{
+                'amount': impact!.costAmount,
+                'currency': impact!.costCurrency,
+              },
+            if (impact!.scope != null) 'scope': impact!.scope,
+          },
       };
+}
+
+/// How "heavy" a card feels to triage (I-102). Derived from severity and
+/// impact — the same rule is mirrored in web/app.js.
+enum RiskLevel {
+  /// Standard swipe distances.
+  normal,
+
+  /// Elevated: longer swipe threshold (cost, critical, or irreversible).
+  high,
+
+  /// Locked: critical AND irreversible. Right-swipe is disabled; approval
+  /// requires the hold-to-confirm ring (I-103).
+  locked,
+}
+
+RiskLevel riskLevel(TaskCard task) {
+  final irreversible = task.impact?.reversible == false;
+  if (task.severity == 'critical' && irreversible) {
+    return RiskLevel.locked;
+  }
+  if (task.severity == 'critical' ||
+      irreversible ||
+      (task.impact?.costAmount ?? 0) > 0) {
+    return RiskLevel.high;
+  }
+  return RiskLevel.normal;
 }

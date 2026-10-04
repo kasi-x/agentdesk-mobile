@@ -4,3 +4,5 @@ AGENT_TOKEN=dev-agent-token
 CLIENT_TOKEN=dev-client-token
 # Optional CORS allowlist (comma-separated origins, "*" allows any)
 # ALLOWED_ORIGINS=http://localhost:3000
+# Optional undo grace window in ms (I-104, default 5000)
+# UNDO_GRACE_MS=5000
