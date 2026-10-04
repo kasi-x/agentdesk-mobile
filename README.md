@@ -17,7 +17,9 @@
 
 Docs: [requirements.ja.md](docs/requirements.ja.md) (原案) ·
 [protocol.md](docs/protocol.md) (wire spec) ·
-[architecture.md](docs/architecture.md).
+[architecture.md](docs/architecture.md) ·
+[philosophy.md](docs/philosophy.md) (設計原則) ·
+[IDEA.md](IDEA.md) (アイデア置き場) · [TODO.md](TODO.md) (実行計画).
 
 ## Quickstart (local E2E, 3 terminals)
 
