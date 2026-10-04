@@ -1,0 +1,16 @@
+/**
+ * Cloudflare Workers config — see docs/architecture.md.
+ * Secrets (AGENT_TOKEN, CLIENT_TOKEN): `wrangler secret put …`
+ * Local dev: copy .dev.vars.example to .dev.vars
+ */
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "agentdesk-hub",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-15",
+  "observability": { "enabled": true },
+  "durable_objects": {
+    "bindings": [{ "name": "TASK_HUB", "class_name": "TaskHub" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TaskHub"] }]
+}

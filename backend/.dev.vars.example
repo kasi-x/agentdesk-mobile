@@ -1,0 +1,6 @@
+# Copy to .dev.vars (git-ignored).
+# Production: wrangler secret put AGENT_TOKEN / wrangler secret put CLIENT_TOKEN
+AGENT_TOKEN=dev-agent-token
+CLIENT_TOKEN=dev-client-token
+# Optional CORS allowlist (comma-separated origins, "*" allows any)
+# ALLOWED_ORIGINS=http://localhost:3000
