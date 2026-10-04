@@ -215,6 +215,35 @@ body {
   gap: 14px;
 }
 
+/* Expiry countdown strip (I-203) — urgency coloring matches mobile. */
+.countdown {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.countdown::before {
+  content: "⏳";
+  font-size: 12px;
+}
+
+.countdown.soon {
+  color: var(--yellow);
+  background: rgba(245, 196, 81, 0.12);
+}
+
+.countdown.urgent,
+.countdown.past {
+  color: var(--red);
+  background: rgba(255, 91, 91, 0.12);
+}
+
 .card-header {
   display: flex;
   align-items: center;

@@ -20,7 +20,6 @@
 
 ## Next — 捌く量を減らす(P8)と、エージェントへの返事の質
 
-- [ ] **期限** (I-203) — `expiresAt` / `onExpire`、カウントダウン表示、hub の alarm で既定動作
 - [ ] **並び順を緊急順に** (I-123, I-206) — 今は新しい順固定
 - [ ] **サーバー側スヌーズ** (既知の逸脱) — `POST /api/v1/actions` に `snooze` アクションと `until`、
       全端末で同期、DO alarm で再浮上
@@ -61,6 +60,17 @@
 - [ ] プロトコルのバージョン番号 (I-606) — Now の変更で v0 を逸脱し始めるので早めに
 
 ## Done
+
+- [x] **期限** (I-203): protocol に `expiresAt` / `onExpire`(approve/reject/escalate/drop、
+      既定 drop、malformed は 400)。hub の統合 alarm に期限を追加 — approve/reject は
+      宣言済みスワイプバインディングを undo 猶予なしで即実行、drop は replyUrl へ
+      `expire/EXPIRED` を返信、escalate は nonce ローテ+severity critical で再配信
+      (クライアントは createTaskCard を同一 taskId なら差し替え)。
+      自動実行は `source: "on_expire"` / `dismissTask.by: "on_expire"` で記録。
+      mobile/web にカウントダウンストリップ(緊急度配色)、mock-agent サンプルと
+      smoke に期限ケース追加。
+      (順番変更: 雑務の withValues 移行を同梱 — Flutter 3.47 をローカル導入したため
+      `flutter analyze` を完全緑にしてから以降の作業を行う)
 
 - [x] Phase 1 MVP: カードスタック、webhook → DO → SSE、楽観的UI、オフラインキュー、
       nonce + 楽観ロック、他端末への dismiss 配信、エージェントへの返送

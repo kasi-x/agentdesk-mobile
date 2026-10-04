@@ -54,7 +54,7 @@ class ComponentRenderer extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
         decoration: BoxDecoration(
           border: const Border(left: BorderSide(color: Colors.white24, width: 3)),
-          color: Colors.white.withOpacity(0.03),
+          color: Colors.white.withValues(alpha: 0.03),
         ),
         child: Text(
           text,
@@ -79,7 +79,7 @@ class ComponentRenderer extends StatelessWidget {
                 style: const TextStyle(fontSize: 12),
               ),
               onPressed: () =>
-                  _onChip(Map<String, dynamic>.from(option as Map)),
+                  _onChip(Map<String, dynamic>.from(option)),
             ),
       ],
     );
@@ -104,9 +104,9 @@ class ComponentRenderer extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.orange.withOpacity(0.08),
+        color: Colors.orange.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.orange.withOpacity(0.4)),
+        border: Border.all(color: Colors.orange.withValues(alpha: 0.4)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

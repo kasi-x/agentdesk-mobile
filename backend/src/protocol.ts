@@ -39,6 +39,16 @@ export interface RejectReason {
   label: string;
 }
 
+/** What the hub does when a card's deadline passes (I-203). */
+export type OnExpireAction = "approve" | "reject" | "escalate" | "drop";
+
+export const ON_EXPIRE_ACTIONS: readonly OnExpireAction[] = [
+  "approve",
+  "reject",
+  "escalate",
+  "drop",
+];
+
 export interface TaskCardActions {
   onSwipeRight?: ActionBinding;
   onSwipeLeft?: ActionBinding;
@@ -63,6 +73,11 @@ export interface TaskCardPayload {
   components: CardComponent[];
   actions: TaskCardActions;
   impact?: CardImpact;
+  /** ISO 8601 instant after which the hub executes the default
+   *  behavior (I-203). Required for `onExpire`. */
+  expiresAt?: string;
+  /** Default behavior at expiry; defaults to the safe "drop". */
+  onExpire?: OnExpireAction;
 }
 
 export interface ActionReply {
@@ -98,6 +113,9 @@ export interface StoredTask {
   pendingReply?: ActionReply;
   processedAt?: number;
   processedBy?: string;
+  /** Set once `onExpire: "escalate"` has fired so the deadline is not
+   *  evaluated twice; the card keeps waiting (severity already bumped). */
+  escalatedAt?: number;
 }
 
 export type ActionDecision =
@@ -164,6 +182,42 @@ export function validateUndoRequest(
     return fail("nonce (string) is required");
   }
   return { ok: true, value: { taskId, nonce } };
+}
+
+export interface ExpiryDecision {
+  action: OnExpireAction;
+  /** The swipe binding to auto-execute for approve/reject. */
+  binding?: ActionBinding;
+}
+
+/**
+ * Pure expiry evaluation (I-203). Returns the default behavior to run
+ * when a *pending* card's `expiresAt` has passed, or null while it is
+ * still waiting (or the deadline was already consumed — escalated tasks
+ * keep waiting, everything else is no longer pending). approve/reject
+ * without the matching swipe binding degrade to the safe "drop".
+ */
+export function expiryDue(
+  stored: StoredTask,
+  now: number,
+): ExpiryDecision | null {
+  if (stored.status !== "pending" || stored.escalatedAt !== undefined) {
+    return null;
+  }
+  const raw = stored.task.expiresAt;
+  if (!raw) return null;
+  const at = Date.parse(raw);
+  if (!Number.isFinite(at) || at > now) return null;
+  const action = stored.task.onExpire ?? "drop";
+  if (action === "approve" || action === "reject") {
+    const binding =
+      action === "approve"
+        ? stored.task.actions.onSwipeRight
+        : stored.task.actions.onSwipeLeft;
+    if (!binding) return { action: "drop" };
+    return { action, binding };
+  }
+  return { action };
 }
 
 export type ValidationResult<T> =
@@ -309,6 +363,29 @@ export function validateTaskCard(
     }
   }
 
+  // I-203: expiry policy. Behavior-bearing fields validate strictly
+  // (a malformed deadline must not silently become "never expires").
+  const expiresAt = body.expiresAt;
+  if (expiresAt !== undefined) {
+    if (typeof expiresAt !== "string" || !Number.isFinite(Date.parse(expiresAt))) {
+      return fail("expiresAt must be an ISO 8601 date string");
+    }
+  }
+  const onExpire = body.onExpire;
+  if (onExpire !== undefined) {
+    if (
+      typeof onExpire !== "string" ||
+      !ON_EXPIRE_ACTIONS.includes(onExpire as OnExpireAction)
+    ) {
+      return fail(
+        "onExpire must be one of approve | reject | escalate | drop",
+      );
+    }
+    if (expiresAt === undefined) {
+      return fail("onExpire requires expiresAt");
+    }
+  }
+
   const value: TaskCardPayload = {
     type: "createTaskCard",
     taskId:
@@ -348,6 +425,8 @@ export function validateTaskCard(
     components: components as CardComponent[],
     actions,
     ...(impact !== undefined ? { impact } : {}),
+    ...(expiresAt !== undefined ? { expiresAt: expiresAt as string } : {}),
+    ...(onExpire !== undefined ? { onExpire: onExpire as OnExpireAction } : {}),
   };
   return { ok: true, value };
 }

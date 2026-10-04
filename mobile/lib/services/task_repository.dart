@@ -280,7 +280,11 @@ class TaskRepository extends ChangeNotifier {
         upsert(TaskCard.fromJson(payload));
         break;
       case 'dismissTask':
-        remove(payload['taskId'] as String?, remote: true);
+        remove(
+          payload['taskId'] as String?,
+          remote: true,
+          remoteBy: payload['by'] as String?,
+        );
         break;
       default:
         break;
@@ -308,8 +312,16 @@ class TaskRepository extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The hub may re-broadcast a card we already hold (I-203 escalate:
+  /// rotated nonce + bumped severity). The hub is the single source of
+  /// truth (P9), so replace in place instead of ignoring the event.
   void upsert(TaskCard task) {
-    if (_stack.any((t) => t.taskId == task.taskId)) return;
+    final index = _stack.indexWhere((t) => t.taskId == task.taskId);
+    if (index != -1) {
+      _stack[index] = task;
+      notifyListeners();
+      return;
+    }
     if (_snoozedIds.contains(task.taskId)) {
       _stack.add(task);
     } else {
@@ -318,13 +330,19 @@ class TaskRepository extends ChangeNotifier {
     notifyListeners();
   }
 
-  void remove(String? taskId, {bool remote = false}) {
+  void remove(String? taskId, {bool remote = false, String? remoteBy}) {
     if (taskId == null) return;
     final index = _stack.indexWhere((t) => t.taskId == taskId);
     if (index == -1) return;
     _stack.removeAt(index);
     _snoozedIds.remove(taskId);
-    if (remote) _toast('別のデバイスで処理されました ($taskId)');
+    if (remote) {
+      _toast(
+        (remoteBy ?? '').startsWith('on_expire')
+            ? '期限のため自動処理されました ($taskId)'
+            : '別のデバイスで処理されました ($taskId)',
+      );
+    }
     notifyListeners();
   }
 

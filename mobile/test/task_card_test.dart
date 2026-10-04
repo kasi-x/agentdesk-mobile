@@ -94,4 +94,31 @@ void main() {
     expect(restored.onSwipeRight?.actionName, 'approve');
     expect(restored.inspectForm.single.id, 'time_picker');
   });
+
+  test('parses expiry fields and round-trips them (I-203)', () {
+    final task = TaskCard.fromJson(<String, dynamic>{
+      ...reference,
+      'expiresAt': '2026-10-05T18:00:00Z',
+      'onExpire': 'approve',
+    });
+    expect(task.expiresAt, DateTime.utc(2026, 10, 5, 18));
+    expect(task.onExpire, 'approve');
+
+    final restored = TaskCard.fromJson(task.toJson());
+    expect(restored.expiresAt, task.expiresAt);
+    expect(restored.onExpire, 'approve');
+  });
+
+  test('missing or malformed expiry fields stay null (I-203)', () {
+    final task = TaskCard.fromJson(reference);
+    expect(task.expiresAt, isNull);
+    expect(task.onExpire, isNull);
+    final broken = TaskCard.fromJson(<String, dynamic>{
+      ...reference,
+      'expiresAt': 12345,
+      'onExpire': 9,
+    });
+    expect(broken.expiresAt, isNull);
+    expect(broken.onExpire, isNull);
+  });
 }

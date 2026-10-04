@@ -1,9 +1,9 @@
-/// Tolerant parsing of the wire protocol (docs/protocol.md).
-///
-/// Unknown component types are preserved and rendered as fallback cards
-/// (FR-1.3); malformed payloads must never crash the app. This file is
-/// the client mirror of `backend/src/protocol.ts` — update both (and
-/// docs/protocol.md) in the same commit.
+// Tolerant parsing of the wire protocol (docs/protocol.md).
+//
+// Unknown component types are preserved and rendered as fallback cards
+// (FR-1.3); malformed payloads must never crash the app. This file is
+// the client mirror of `backend/src/protocol.ts` — update both (and
+// docs/protocol.md) in the same commit.
 
 class AgentInfo {
   final String name;
@@ -156,6 +156,12 @@ class TaskCard {
   /// offers them as one-tap chips; the chosen id is sent as
   /// `data.reason`.
   final List<RejectReason> rejectReasons;
+  /// Deadline after which the hub runs the default behavior (I-203);
+  /// null = no expiry. Clients only render a countdown from it.
+  final DateTime? expiresAt;
+  /// approve | reject | escalate | drop — displayed next to the
+  /// countdown; the hub decides at the deadline, never the client.
+  final String? onExpire;
 
   const TaskCard({
     required this.taskId,
@@ -174,6 +180,8 @@ class TaskCard {
     required this.inspectForm,
     required this.impact,
     this.rejectReasons = const <RejectReason>[],
+    this.expiresAt,
+    this.onExpire,
   });
 
   factory TaskCard.fromJson(dynamic raw) {
@@ -217,6 +225,8 @@ class TaskCard {
               .map(RejectReason.fromJson)
               .toList()
           : const <RejectReason>[],
+      expiresAt: DateTime.tryParse(raw['expiresAt'] is String ? raw['expiresAt'] as String : ''),
+      onExpire: raw['onExpire'] is String ? raw['onExpire'] as String : null,
     );
   }
 
@@ -295,6 +305,8 @@ class TaskCard {
               },
             if (impact!.scope != null) 'scope': impact!.scope,
           },
+        if (expiresAt != null) 'expiresAt': expiresAt!.toUtc().toIso8601String(),
+        if (onExpire != null) 'onExpire': onExpire,
       };
 }
 

@@ -32,8 +32,8 @@ class _TriageScreenState extends State<TriageScreen> {
     repo.onToast = _showToast;
     repo.onConflict = _conflictHaptic;
     repo.start();
-    _ticker = Timer.periodic(const Duration(seconds: 30), (_) {
-      if (mounted) setState(() {}); // refresh elapsed-time labels
+    _ticker = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (mounted) setState(() {}); // refresh elapsed + countdown labels (I-203)
     });
   }
 
@@ -321,9 +321,9 @@ class _PendingBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: const Color(0xFF5B8DEF).withOpacity(0.18),
+        color: const Color(0xFF5B8DEF).withValues(alpha: 0.18),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: const Color(0xFF5B8DEF).withOpacity(0.5)),
+        border: Border.all(color: const Color(0xFF5B8DEF).withValues(alpha: 0.5)),
       ),
       child: Text(
         '$count pending',
@@ -495,7 +495,7 @@ class _EmptyState extends StatelessWidget {
           Icon(
             Icons.task_alt,
             size: 56,
-            color: Colors.white.withOpacity(0.15),
+            color: Colors.white.withValues(alpha: 0.15),
           ),
           const SizedBox(height: 16),
           const Text(
@@ -505,7 +505,7 @@ class _EmptyState extends StatelessWidget {
           const SizedBox(height: 6),
           Text(
             reconnecting ? 'ハブに再接続中…' : 'エージェントの判断待ちはありません',
-            style: TextStyle(fontSize: 13, color: Colors.white.withOpacity(0.4)),
+            style: TextStyle(fontSize: 13, color: Colors.white.withValues(alpha: 0.4)),
           ),
         ],
       ),

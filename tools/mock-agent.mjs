@@ -76,6 +76,10 @@ function sampleCards(callbackBase) {
         summary: "定例ミーティングを 16:30 に変更して全員に通知します",
         reversible: true,
       },
+      // I-203: if nobody answers within 3 minutes the hub auto-approves
+      // (recorded as source "on_expire" — an automatic, not a human).
+      expiresAt: new Date(Date.now() + 3 * 60 * 1000).toISOString(),
+      onExpire: "approve",
     },
     {
       type: "createTaskCard",
@@ -170,6 +174,9 @@ function sampleCards(callbackBase) {
         summary: "このメールを削除し、迷惑メールとして報告します",
         reversible: true,
       },
+      // I-203: low-stakes demo card — silently dropped 90s after enqueue.
+      expiresAt: new Date(Date.now() + 90 * 1000).toISOString(),
+      onExpire: "drop",
     },
   ];
 }
@@ -190,7 +197,7 @@ async function send(port) {
     console.log(`${res.status}  ${card.taskId}  ${card.summary}${res.ok ? "" : ` — ${body}`}`);
   }
   console.log(
-    `\n✅ ${cards.length} cards sent to ${HUB_URL}.\nStart 'node tools/mock-agent.mjs listen' and swipe them in the app — triage replies will be printed there.`,
+    `\n✅ ${cards.length} cards sent to ${HUB_URL}.\nStart 'node tools/mock-agent.mjs listen' and swipe them in the app — triage replies will be printed there.\n(期限テスト: calendar は3分後に自動承認、inbox は90秒後に自動破棄 — 触れずに待つと listen に on_expire の返信が届きます)`,
   );
 }
 
