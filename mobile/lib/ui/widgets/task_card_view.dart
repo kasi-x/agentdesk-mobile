@@ -1,5 +1,6 @@
-import 'package:flutter/material.dart';
+import 'dart:math';
 
+import 'package:flutter/material.dart';
 
 import '../../models/task_card.dart';
 import '../colors.dart';
@@ -17,6 +18,10 @@ class TaskCardView extends StatefulWidget {
   final int swipePercentX;
   final int swipePercentY;
 
+  /// Percent of the swipe threshold at which the second stage begins
+  /// (I-101); 0 disables the second-stage overlay label.
+  final int secondStageThreshold;
+
   const TaskCardView({
     super.key,
     required this.task,
@@ -25,6 +30,7 @@ class TaskCardView extends StatefulWidget {
     required this.onInspect,
     this.swipePercentX = 0,
     this.swipePercentY = 0,
+    this.secondStageThreshold = 0,
   });
 
   @override
@@ -33,6 +39,7 @@ class TaskCardView extends StatefulWidget {
 
 class _TaskCardViewState extends State<TaskCardView> {
   bool _expanded = false;
+  bool _flipped = false;
 
   TaskCard get task => widget.task;
 
@@ -74,64 +81,152 @@ class _TaskCardViewState extends State<TaskCardView> {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-      child: Container(
-        decoration: BoxDecoration(
-          color: PopColors.surface,
-          borderRadius: BorderRadius.circular(18),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.5),
-              blurRadius: 30,
-              offset: const Offset(0, 10),
-            ),
-          ],
+      child: GestureDetector(
+        // Double-tap flips the card over (I-107); single tap still opens
+        // the inspect sheet via the InkWell inside [_frontFace].
+        onDoubleTap: () => setState(() => _flipped = !_flipped),
+        child: TweenAnimationBuilder<double>(
+          tween: Tween<double>(begin: 0, end: _flipped ? 1 : 0),
+          duration: const Duration(milliseconds: 380),
+          curve: Curves.easeInOutCubic,
+          builder: (context, t, _) {
+            final angle = t * pi;
+            final back = angle > pi / 2;
+            return Transform(
+              alignment: Alignment.center,
+              transform: Matrix4.identity()
+                ..setEntry(3, 2, 0.0012)
+                ..rotateY(angle),
+              child: back
+                  ? Transform(
+                      alignment: Alignment.center,
+                      transform: Matrix4.identity()..rotateY(pi),
+                      child: _backFace(),
+                    )
+                  : _frontFace(),
+            );
+          },
         ),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(18),
-            onTap: widget.onInspect,
-            child: Stack(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _header(),
-                      const SizedBox(height: 8),
-                      Text(
-                        task.summary,
-                        style: const TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: -0.4,
-                          height: 1.3,
-                          color: PopColors.text,
-                        ),
+      ),
+    );
+  }
+
+  BoxDecoration get _cardDecoration => BoxDecoration(
+        color: PopColors.surface,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.5),
+            blurRadius: 30,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      );
+
+  Widget _frontFace() {
+    return Container(
+      decoration: _cardDecoration,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(18),
+          onTap: widget.onInspect,
+          child: Stack(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _header(),
+                    const SizedBox(height: 8),
+                    Text(
+                      task.summary,
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: -0.4,
+                        height: 1.3,
+                        color: PopColors.text,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    for (final component in _frontComponents) ...[
+                      ComponentRenderer(
+                        component: component,
+                        onAction: widget.onQuickAction,
+                        onInspect: widget.onInspect,
                       ),
                       const SizedBox(height: 8),
-                      for (final component in _frontComponents) ...[
-                        ComponentRenderer(
-                          component: component,
-                          onAction: widget.onQuickAction,
-                          onInspect: widget.onInspect,
-                        ),
-                        const SizedBox(height: 8),
-                      ],
-                      _metaLine(),
-                      if (_hasDetails) ...[
-                        const SizedBox(height: 4),
-                        _detailsSection(),
-                      ],
                     ],
+                    _metaLine(),
+                    if (_hasDetails) ...[
+                      const SizedBox(height: 4),
+                      _detailsSection(),
+                    ],
+                  ],
+                ),
+              ),
+              Positioned.fill(
+                child: IgnorePointer(child: _swipeOverlay()),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Back face of the card (I-107): 検証 — 根拠 / 誰が / 参加者 / 出典
+  /// quote-block. Pure context, no decision controls; double-tap returns.
+  Widget _backFace() {
+    return Container(
+      decoration: _cardDecoration,
+      child: Material(
+        color: Colors.transparent,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.flip_to_front,
+                      size: 16, color: PopColors.text3),
+                  SizedBox(width: 6),
+                  Text(
+                    '裏面 — 根拠と出典',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: PopColors.text2,
+                    ),
                   ),
-                ),
-                Positioned.fill(
-                  child: IgnorePointer(child: _swipeOverlay()),
-                ),
-              ],
-            ),
+                  Spacer(),
+                  Text('ダブルタップで戻す',
+                      style:
+                          TextStyle(fontSize: 11, color: PopColors.text3)),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: _hasDetails
+                    ? SingleChildScrollView(
+                        child: _DetailsPanel(
+                          task: task,
+                          movedTexts: _movedTexts,
+                          deadlineUrgent: _deadlineUrgent,
+                        ),
+                      )
+                    : const Center(
+                        child: Text(
+                          '裏面の情報はありません',
+                          style: TextStyle(
+                              fontSize: 13, color: PopColors.text3),
+                        ),
+                      ),
+              ),
+            ],
           ),
         ),
       ),
@@ -150,7 +245,9 @@ class _TaskCardViewState extends State<TaskCardView> {
           child: task.agent.avatarUrl != null
               ? null
               : Text(
-                  task.agent.name.isNotEmpty ? task.agent.name[0] : '?',
+                  task.agent.name.isNotEmpty
+                      ? task.agent.name.characters.first
+                      : '?',
                   style: const TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
@@ -286,6 +383,15 @@ class _TaskCardViewState extends State<TaskCardView> {
     if (x.abs() >= y.abs() && x != 0) {
       final opacity = (x.abs() / 100).clamp(0.0, 1.0);
       final approve = x > 0;
+      final secondStage = widget.secondStageThreshold > 0 &&
+          x.abs() >= widget.secondStageThreshold;
+      final label = approve
+          ? (secondStage
+              ? '承認+自動化を提案'
+              : (task.onSwipeRight?.label ?? 'APPROVE'))
+          : (secondStage
+              ? '却下+同種をミュート'
+              : (task.onSwipeLeft?.label ?? 'REJECT'));
       layer = Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(18),
@@ -305,14 +411,13 @@ class _TaskCardViewState extends State<TaskCardView> {
             ),
             const SizedBox(height: 6),
             Text(
-              approve
-                  ? (task.onSwipeRight?.label ?? 'APPROVE')
-                  : (task.onSwipeLeft?.label ?? 'REJECT'),
+              label,
+              textAlign: TextAlign.center,
               style: TextStyle(
                 color: approve ? PopColors.green : PopColors.red,
-                fontSize: 18,
+                fontSize: secondStage ? 16 : 18,
                 fontWeight: FontWeight.w800,
-                letterSpacing: 2,
+                letterSpacing: secondStage ? 0.5 : 2,
               ),
             ),
           ],

@@ -2,6 +2,13 @@
 // Keep this file pure (no Workers/DOM globals beyond crypto.randomUUID)
 // so it stays unit-testable with plain vitest.
 
+/**
+ * Current wire version (I-606). Cards that carry no `protocolVersion`
+ * are v0 and treated as `1` — the field is additive, so v0 producers
+ * keep working unchanged.
+ */
+export const PROTOCOL_VERSION = 1;
+
 export interface AgentInfo {
   name: string;
   avatarUrl?: string;
@@ -67,11 +74,32 @@ export interface TaskCardActions {
   rejectReasons?: RejectReason[];
 }
 
+/** What kind of decision the card asks for; `approve` when absent. */
+export type DecisionKind = "approve" | "choose" | "fill";
+
+export const DECISION_KINDS: readonly DecisionKind[] = [
+  "approve",
+  "choose",
+  "fill",
+];
+
+/** Inline value editing hint: the named component may be adjusted in
+ *  place (number stepper / datetime picker) before approving. */
+export interface EditableHint {
+  componentId: string;
+  kind: "number" | "datetime";
+  min?: number;
+  max?: number;
+  step?: number;
+}
+
 
 export interface TaskCardPayload {
   type: "createTaskCard";
   taskId: string;
   nonce: string;
+  /** Wire version of this card (I-606); absent = v0, treated as 1. */
+  protocolVersion?: number;
   agent: AgentInfo;
   confidence?: number;
   confidenceReasons?: string[];
@@ -91,6 +119,19 @@ export interface TaskCardPayload {
   expiresAt?: string;
   /** Default behavior at expiry; defaults to the safe "drop". */
   onExpire?: OnExpireAction;
+  /** Cards sharing a key are a bundle (I-201); the client may render
+   *  them as one summary card and triage them together. */
+  groupKey?: string;
+  /** approve | choose | fill (default approve). */
+  decisionKind?: DecisionKind;
+  /** Inline value editing hint (I-114). */
+  editable?: EditableHint;
+  /** Hub-computed urgency score (I-206); higher = more urgent. Never
+   *  sent by agents — attached by the hub on broadcast/snapshot. */
+  priority?: number;
+  /** Hub marker on `createTaskCard` re-broadcasts after an agent update
+   *  (I-204): clients may show a 「更新されました」 hint. */
+  revised?: boolean;
 }
 
 export interface ActionReply {
@@ -100,7 +141,16 @@ export interface ActionReply {
   timestamp: string;
   source: string;
   data?: Record<string, unknown>;
+  /** `"snooze"` asks the hub to hide the card until `until` instead of
+   *  processing it (server-side snooze). */
+  action?: "snooze";
+  /** ISO 8601 instant the snoozed card resurfaces; required with
+   *  `action: "snooze"`, at most 7 days out. */
+  until?: string;
 }
+
+/** Longest accepted snooze duration. */
+export const MAX_SNOOZE_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** `committing` = decision accepted but still inside the undo grace window
  *  (I-104): not delivered to the agent yet, revertible to `pending`. */
@@ -129,10 +179,51 @@ export interface StoredTask {
   /** Set once `onExpire: "escalate"` has fired so the deadline is not
    *  evaluated twice; the card keeps waiting (severity already bumped). */
   escalatedAt?: number;
+  /** Server-side snooze: wall time the hidden card resurfaces. While set
+   *  and in the future the task stays `pending` but is absent from the
+   *  stack / snapshot `tasks` (it appears under `snoozed` instead). */
+  snoozedUntil?: number;
+  /** replyUrl delivery bookkeeping (I-604): retries + terminal failure. */
+  delivery?: DeliveryState;
+  /** Terminal decision recorded for `GET /result` (I-901): what was
+   *  decided, by which source, and when. */
+  outcome?: Outcome;
+}
+
+/** replyUrl delivery state (I-604/I-801). `url`/`reply` are retained so
+ *  retries after the task reaches `processed` can re-send the exact body. */
+export interface DeliveryState {
+  attempts: number;
+  url?: string;
+  reply?: ActionReply;
+  lastError?: string;
+  /** Wall time of the next retry attempt (absent once delivered/given up). */
+  nextRetryAt?: number;
+  /** true = the retry budget is spent; surfaced via `deliveryFailed`. */
+  failed?: boolean;
+}
+
+/** The decision a task finished with, exposed to the agent SDK (I-901). */
+export interface Outcome {
+  name: string;
+  data?: Record<string, unknown>;
+  source: string;
+  at: string;
+}
+
+/** Snapshot envelope (`snapshot` SSE + `GET /api/v1/state`). */
+export interface SnapshotPayload {
+  protocolVersion: number;
+  /** Pending, non-snoozed tasks — priority desc, createdAt asc. */
+  tasks: TaskCardPayload[];
+  snoozed: { taskId: string; until: string }[];
+  /** Terminal replyUrl failures (I-604) awaiting operator attention. */
+  delivery: { taskId: string; lastError?: string; attempts: number }[];
 }
 
 export type ActionDecision =
   | { kind: "apply" }
+  | { kind: "snooze" }
   | { kind: "conflict"; reason: "already_processed" }
   | { kind: "not_found" }
   | { kind: "bad_nonce" };
@@ -159,7 +250,56 @@ export function decideAction(
   if (stored.status !== "pending") {
     return { kind: "conflict", reason: "already_processed" };
   }
+  // Snooze (server-side snooze, known deviation): only ever applies to a
+  // still-pending card; it keeps the nonce (rotation happens when the
+  // alarm resurfaces the card).
+  if (reply.action === "snooze") return { kind: "snooze" };
   return { kind: "apply" };
+}
+
+/** Severity base scores used by {@link computePriority} (I-206). */
+const SEVERITY_BASE: Record<string, number> = {
+  info: 10,
+  notice: 20,
+  warning: 40,
+  critical: 80,
+};
+
+/**
+ * Hub-side urgency score (I-123/I-206), higher = more urgent:
+ *
+ *   severity base (info 10 / notice 20 / warning 40 / critical 80)
+ *   + deadline proximity (≤1h +50, ≤6h +30, ≤24h +10)
+ *   + (1 − confidence) × 10
+ *   + waiting time (+1 per 10 min, capped at +20)
+ *
+ * Pure so the hub can reuse it for ordering and for the `priority`
+ * field it attaches to broadcasts/snapshots.
+ */
+export function computePriority(
+  task: TaskCardPayload,
+  enqueuedAt: number,
+  now: number,
+): number {
+  let score = SEVERITY_BASE[task.severity ?? "info"] ?? 10;
+
+  if (task.expiresAt) {
+    const at = Date.parse(task.expiresAt);
+    if (Number.isFinite(at)) {
+      const remaining = at - now;
+      if (remaining <= 60 * 60 * 1000) score += 50;
+      else if (remaining <= 6 * 60 * 60 * 1000) score += 30;
+      else if (remaining <= 24 * 60 * 60 * 1000) score += 10;
+    }
+  }
+
+  const confidence = Math.min(1, Math.max(0, task.confidence ?? 0.5));
+  score += (1 - confidence) * 10;
+
+  const ageMs = Math.max(0, now - enqueuedAt);
+  score += Math.min(20, Math.floor(ageMs / (10 * 60 * 1000)));
+
+  return Math.round(score * 100) / 100;
 }
 
 /**
@@ -420,6 +560,70 @@ export function validateTaskCard(
     };
   }
 
+  // I-606: wire version. Absent = v0 producer, treated as 1; anything
+  // else must be a positive integer.
+  let protocolVersion = PROTOCOL_VERSION;
+  if (body.protocolVersion !== undefined) {
+    if (
+      typeof body.protocolVersion !== "number" ||
+      !Number.isInteger(body.protocolVersion) ||
+      body.protocolVersion < 1
+    ) {
+      return fail("protocolVersion must be a positive integer");
+    }
+    protocolVersion = body.protocolVersion;
+  }
+
+  // I-201: grouping key. Behavior-bearing (bulk triage), so malformed
+  // values are rejected rather than silently dropped.
+  let groupKey: string | undefined;
+  if (body.groupKey !== undefined) {
+    if (typeof body.groupKey !== "string" || body.groupKey.length === 0) {
+      return fail("groupKey must be a non-empty string");
+    }
+    groupKey = body.groupKey;
+  }
+
+  // Decision shape (default approve) and the inline-editing hint.
+  let decisionKind: DecisionKind | undefined;
+  if (body.decisionKind !== undefined) {
+    if (
+      typeof body.decisionKind !== "string" ||
+      !DECISION_KINDS.includes(body.decisionKind as DecisionKind)
+    ) {
+      return fail("decisionKind must be approve | choose | fill");
+    }
+    decisionKind = body.decisionKind as DecisionKind;
+  }
+  let editable: EditableHint | undefined;
+  if (body.editable !== undefined) {
+    const raw = body.editable;
+    if (!isRecord(raw)) return fail("editable must be an object");
+    const componentId = raw.componentId;
+    const kind = raw.kind;
+    if (typeof componentId !== "string" || componentId.length === 0) {
+      return fail("editable.componentId (non-empty string) is required");
+    }
+    if (kind !== "number" && kind !== "datetime") {
+      return fail("editable.kind must be number | datetime");
+    }
+    const min = raw.min;
+    const max = raw.max;
+    const step = raw.step;
+    for (const [field, value] of [["min", min], ["max", max], ["step", step]] as const) {
+      if (value !== undefined && typeof value !== "number") {
+        return fail(`editable.${field} must be a number`);
+      }
+    }
+    editable = {
+      componentId,
+      kind,
+      ...(typeof min === "number" ? { min } : {}),
+      ...(typeof max === "number" ? { max } : {}),
+      ...(typeof step === "number" ? { step } : {}),
+    };
+  }
+
   const replyUrl = body.replyUrl;
   if (replyUrl !== undefined) {
     if (typeof replyUrl !== "string" || !/^https?:\/\//.test(replyUrl)) {
@@ -460,6 +664,7 @@ export function validateTaskCard(
       typeof body.nonce === "string" && body.nonce.length > 0
         ? body.nonce
         : `tok_${crypto.randomUUID()}`,
+    protocolVersion,
     agent: {
       name: agent.name,
       ...(typeof agent.avatarUrl === "string"
@@ -492,11 +697,22 @@ export function validateTaskCard(
     ...(context !== undefined ? { context } : {}),
     ...(expiresAt !== undefined ? { expiresAt: expiresAt as string } : {}),
     ...(onExpire !== undefined ? { onExpire: onExpire as OnExpireAction } : {}),
+    ...(groupKey !== undefined ? { groupKey } : {}),
+    ...(decisionKind !== undefined ? { decisionKind } : {}),
+    ...(editable !== undefined ? { editable } : {}),
   };
   return { ok: true, value };
 }
 
-/** Validates a client triage reply (7.2 payload). Timestamp is filled by the hub. */
+/**
+ * Validates a client triage reply (7.2 payload). Timestamp is filled by
+ * the hub. Two shapes share this endpoint:
+ *
+ * - a normal action: `{taskId, nonce, actionName, source?, data?}`
+ * - a server-side snooze: `{taskId, nonce, action: "snooze", until}` —
+ *   `until` must be an ISO 8601 instant at most {@link MAX_SNOOZE_MS}
+ *   (7 days) in the future.
+ */
 export function validateActionReply(
   body: unknown,
 ): ValidationResult<ActionReply> {
@@ -508,6 +724,38 @@ export function validateActionReply(
   if (typeof nonce !== "string" || nonce.length === 0) {
     return fail("nonce (string) is required");
   }
+
+  if (body.action !== undefined && body.action !== "snooze") {
+    return fail('action must be "snooze" when present');
+  }
+  if (body.action === "snooze") {
+    const until = body.until;
+    if (typeof until !== "string" || !Number.isFinite(Date.parse(until))) {
+      return fail("snooze requires an ISO 8601 until");
+    }
+    if (Date.parse(until) > Date.now() + MAX_SNOOZE_MS) {
+      return fail("snooze until must be at most 7 days out");
+    }
+    return {
+      ok: true,
+      value: {
+        taskId,
+        nonce,
+        actionName: typeof actionName === "string" && actionName.length > 0
+          ? actionName
+          : "snooze",
+        timestamp:
+          typeof body.timestamp === "string"
+            ? body.timestamp
+            : new Date().toISOString(),
+        source: typeof body.source === "string" ? body.source : "snooze",
+        action: "snooze",
+        until,
+        ...(isRecord(body.data) ? { data: body.data } : {}),
+      },
+    };
+  }
+
   if (typeof actionName !== "string" || actionName.length === 0) {
     return fail("actionName (string) is required");
   }
@@ -525,4 +773,52 @@ export function validateActionReply(
       ...(isRecord(body.data) ? { data: body.data } : {}),
     },
   };
+}
+
+/** One item of a bulk triage request (I-201 `POST /api/v1/actions/bulk`). */
+export interface BulkActionItem {
+  taskId: string;
+  nonce: string;
+  actionName: string;
+  source: string;
+  data?: Record<string, unknown>;
+}
+
+/**
+ * Validates a bulk triage envelope `{actions:[…]}`. Each item is
+ * normalized like a single action; the hub then CASes them
+ * independently — one failure never rolls back the others.
+ */
+export function validateBulkRequest(
+  body: unknown,
+): ValidationResult<{ actions: BulkActionItem[] }> {
+  if (!isRecord(body)) return fail("payload must be a JSON object");
+  const raw = body.actions;
+  if (!Array.isArray(raw)) return fail("actions must be an array");
+  if (raw.length === 0) return fail("actions must not be empty");
+  const actions: BulkActionItem[] = [];
+  for (const item of raw) {
+    if (!isRecord(item)) return fail("every action must be an object");
+    const taskId = item.taskId;
+    const nonce = item.nonce;
+    const action = item.action;
+    const source = item.source;
+    if (typeof taskId !== "string" || taskId.length === 0) {
+      return fail("every action needs a string taskId");
+    }
+    if (typeof nonce !== "string" || nonce.length === 0) {
+      return fail("every action needs a string nonce");
+    }
+    if (typeof action !== "string" || action.length === 0) {
+      return fail("every action needs a string action");
+    }
+    actions.push({
+      taskId,
+      nonce,
+      actionName: action,
+      source: typeof source === "string" ? source : "bulk",
+      ...(isRecord(item.data) ? { data: item.data } : {}),
+    });
+  }
+  return { ok: true, value: { actions } };
 }

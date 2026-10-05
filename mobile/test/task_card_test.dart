@@ -147,4 +147,71 @@ void main() {
     expect(broken.expiresAt, isNull);
     expect(broken.onExpire, isNull);
   });
+
+  test('defaults protocolVersion to 1 when absent and keeps explicit (I-606)', () {
+    expect(TaskCard.fromJson(reference).protocolVersion, 1);
+    expect(
+      TaskCard.fromJson({...reference, 'protocolVersion': 1}).protocolVersion,
+      1,
+    );
+    // malformed versions fall back to 1 instead of crashing
+    expect(
+      TaskCard.fromJson({...reference, 'protocolVersion': 'one'}).protocolVersion,
+      1,
+    );
+  });
+
+  test('parses grouping, decisionKind, editable and priority (I-201/I-206)', () {
+    final task = TaskCard.fromJson(<String, dynamic>{
+      ...reference,
+      'groupKey': 'inbox_spam',
+      'decisionKind': 'fill',
+      'priority': 93.4,
+      'revised': true,
+      'editable': {
+        'componentId': 'amount',
+        'kind': 'number',
+        'min': 0,
+        'max': 120,
+        'step': 5,
+      },
+    });
+    expect(task.groupKey, 'inbox_spam');
+    expect(task.decisionKind, 'fill');
+    expect(task.priority, 93.4);
+    expect(task.revised, isTrue);
+    expect(task.editable?.componentId, 'amount');
+    expect(task.editable?.kind, 'number');
+    expect(task.editable?.max, 120);
+
+    final restored = TaskCard.fromJson(task.toJson());
+    expect(restored.groupKey, 'inbox_spam');
+    expect(restored.decisionKind, 'fill');
+    expect(restored.priority, 93.4);
+    expect(restored.revised, isTrue);
+    expect(restored.editable?.step, 5);
+  });
+
+  test('defaults decisionKind to approve and tolerates malformed additions', () {
+    final task = TaskCard.fromJson(reference);
+    expect(task.decisionKind, 'approve');
+    expect(task.groupKey, isNull);
+    expect(task.editable, isNull);
+    expect(task.priority, isNull);
+    expect(task.revised, isFalse);
+
+    final broken = TaskCard.fromJson(<String, dynamic>{
+      ...reference,
+      'groupKey': 7,
+      'decisionKind': '',
+      'editable': 'nope',
+      'priority': 'high',
+      'revised': 'yes',
+    });
+    expect(broken.groupKey, isNull);
+    expect(broken.decisionKind, 'approve');
+    expect(broken.editable, isNull);
+    expect(broken.priority, isNull);
+    expect(broken.revised, isFalse);
+  });
 }

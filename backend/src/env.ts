@@ -11,4 +11,7 @@ export interface Env {
   /** Undo grace window in ms (I-104). Parsed as integer; defaults to
    *  `UNDO_GRACE_MS` (5000) when absent or unparsable. */
   UNDO_GRACE_MS?: string;
+  /** HMAC key for replyUrl signatures (I-801); falls back to
+   *  `AGENT_TOKEN` when unset. */
+  REPLY_SIGNING_SECRET?: string;
 }

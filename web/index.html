@@ -21,6 +21,8 @@
       <span id="status-dot" class="dot" title="接続状態"></span>
     </div>
     <span id="pending-count" class="count" hidden></span>
+    <button id="fleet-toggle" class="btn ghost sm" type="button" aria-pressed="false" title="エージェント別レーン">Fleet</button>
+    <button id="pause-btn" class="btn danger sm" type="button" title="緊急停止">緊急停止</button>
     <button id="settings-toggle" class="btn ghost sm" type="button">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
@@ -29,6 +31,10 @@
       設定
     </button>
   </header>
+
+  <div id="pause-banner" class="pause-banner" hidden></div>
+
+  <section id="fleet-panel" class="fleet" aria-label="エージェント別レーン" hidden></section>
 
   <section id="settings" class="settings" hidden>
     <label class="field">
@@ -40,23 +46,56 @@
       <input id="token-input" type="password" autocomplete="off" placeholder="dev-client-token" />
     </label>
     <div class="settings-actions">
+      <button id="settings-pause" class="btn danger" type="button">緊急停止</button>
       <button id="save-settings" class="btn primary" type="button">接続</button>
     </div>
   </section>
 
   <main id="stack"></main>
 
+  <div id="tray" class="tray" hidden></div>
+
   <footer class="kbd-hints" aria-hidden="true">
     <span><kbd>→</kbd>承認</span>
     <span><kbd>←</kbd>却下</span>
+    <span><kbd>Shift</kbd>+<kbd>→</kbd>承認+自動化</span>
+    <span><kbd>j</kbd>/<kbd>k</kbd>移動</span>
     <span><kbd>i</kbd>詳細</span>
     <span><kbd>s</kbd>後で</span>
+    <span><kbd>z</kbd>元に戻す</span>
+    <span><kbd>1</kbd>〜<kbd>9</kbd>チップ</span>
+    <span><kbd>?</kbd>一覧</span>
   </footer>
 
   <div id="sheet-backdrop" class="sheet-backdrop" hidden></div>
   <div id="inspect-sheet" class="sheet" hidden></div>
+
+  <div id="history-backdrop" class="sheet-backdrop" hidden></div>
+  <section id="history-panel" class="sheet history-panel" aria-label="処理履歴" hidden></section>
+
+  <div id="kbd-overlay" class="kbd-overlay" hidden>
+    <div class="kbd-overlay-card" role="dialog" aria-label="キーボードショートカット">
+      <div class="kbd-overlay-head">
+        <span class="kbd-overlay-title">キーボードショートカット</span>
+        <span class="kbd-overlay-hint"><kbd>?</kbd> または <kbd>Esc</kbd> で閉じる</span>
+      </div>
+      <ul class="kbd-list">
+        <li><span class="kbd-keys"><kbd>→</kbd></span><span>選択中のカードを承認</span></li>
+        <li><span class="kbd-keys"><kbd>Shift</kbd>+<kbd>→</kbd></span><span>承認 + 自動化を提案（二段）</span></li>
+        <li><span class="kbd-keys"><kbd>←</kbd></span><span>却下（理由チップがあれば <kbd>1</kbd>〜<kbd>9</kbd> で選択）</span></li>
+        <li><span class="kbd-keys"><kbd>j</kbd> <kbd>k</kbd></span><span>次のカード / 前のカードへ移動</span></li>
+        <li><span class="kbd-keys"><kbd>i</kbd></span><span>詳細・修正シートを開く</span></li>
+        <li><span class="kbd-keys"><kbd>s</kbd></span><span>後で（山札の最後尾へ）</span></li>
+        <li><span class="kbd-keys"><kbd>z</kbd></span><span>直前の操作を元に戻す</span></li>
+        <li><span class="kbd-keys"><kbd>1</kbd>〜<kbd>9</kbd></span><span>理由チップ / クイック選択のチップを選ぶ</span></li>
+        <li><span class="kbd-keys"><kbd>Esc</kbd></span><span>シートを閉じる</span></li>
+        <li><span class="kbd-keys"><kbd>?</kbd></span><span>この一覧を表示 / 非表示</span></li>
+      </ul>
+    </div>
+  </div>
+
   <div id="toasts" class="toasts"></div>
 
-  <script src="/app.js"></script>
+  <script type="module" src="/app.js"></script>
 </body>
 </html>

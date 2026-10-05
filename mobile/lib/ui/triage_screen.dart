@@ -1,10 +1,10 @@
 import 'dart:async';
-import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_card_swiper/flutter_card_swiper.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/task_card.dart';
 import '../models/triage_action.dart';
@@ -12,7 +12,12 @@ import '../services/task_repository.dart';
 import 'inspect_sheet.dart';
 import 'colors.dart';
 import 'settings_screen.dart';
+import 'widgets/drop_zone_overlay.dart';
 import 'widgets/hold_confirm.dart';
+import 'widgets/overview_grid.dart';
+import 'widgets/practice_screen.dart';
+import 'widgets/reject_reason_sheet.dart';
+import 'widgets/swipe_threshold_haptic.dart';
 import 'widgets/task_card_view.dart';
 
 class TriageScreen extends StatefulWidget {
@@ -26,6 +31,25 @@ class _TriageScreenState extends State<TriageScreen> {
   final CardSwiperController _controller = CardSwiperController();
   Timer? _ticker;
 
+  /// Set while a horizontal drag sits past the second-stage threshold
+  /// (I-101): 'right' | 'left' | null. Read on release by [_onSwipe].
+  String? _secondStage;
+
+  /// Pinch-in overview (I-105).
+  bool _overview = false;
+
+  /// Hold-for-drop-zones state (I-108).
+  bool _dropMode = false;
+  DropAction? _dropHover;
+  Timer? _dropTimer;
+  Offset _pointerDown = Offset.zero;
+  Size _stackSize = Size.zero;
+
+  /// Raw pointer tracking for pinch (manual, so CardSwiper's pan
+  /// recognizer keeps the arena for swipes).
+  final Map<int, Offset> _pointers = <int, Offset>{};
+  double? _pinchBase;
+
   @override
   void initState() {
     super.initState();
@@ -36,12 +60,26 @@ class _TriageScreenState extends State<TriageScreen> {
     _ticker = Timer.periodic(const Duration(seconds: 10), (_) {
       if (mounted) setState(() {}); // refresh elapsed + countdown labels (I-203)
     });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _maybeShowPractice();
+    });
   }
 
   @override
   void dispose() {
     _ticker?.cancel();
+    _dropTimer?.cancel();
     super.dispose();
+  }
+
+  /// First-run onboarding (I-129): show the practice stack once, then
+  /// never automatically again (replayable from Settings).
+  Future<void> _maybeShowPractice() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool('practice_seen') ?? false) return;
+    if (!mounted) return;
+    await Navigator.of(context).push(PracticeScreen.route());
+    await prefs.setBool('practice_seen', true);
   }
 
   void _showToast(String message, {String? undoableTaskId}) {
@@ -130,6 +168,13 @@ class _TriageScreenState extends State<TriageScreen> {
             ),
           ),
           IconButton(
+            icon: const Icon(Icons.grid_view_rounded),
+            tooltip: '俯瞰',
+            onPressed: tasks.isEmpty
+                ? null
+                : () => setState(() => _overview = true),
+          ),
+          IconButton(
             icon: const Icon(Icons.settings_outlined),
             onPressed: () =>
                 Navigator.of(context).push(SettingsScreen.route()),
@@ -139,7 +184,16 @@ class _TriageScreenState extends State<TriageScreen> {
       ),
       body: tasks.isEmpty
           ? _EmptyState(reconnecting: !repo.connected.value)
-          : _buildStack(tasks),
+          : _overview
+              ? OverviewGrid(
+                  tasks: tasks,
+                  onPick: (task) {
+                    repo.bringToTop(task.taskId);
+                    setState(() => _overview = false);
+                  },
+                  onClose: () => setState(() => _overview = false),
+                )
+              : _buildStack(tasks),
     );
   }
 
@@ -150,98 +204,258 @@ class _TriageScreenState extends State<TriageScreen> {
     final top = tasks.first;
     final risk = riskLevel(top);
     final locked = risk == RiskLevel.locked;
-    return Stack(
-      children: [
-        CardSwiper(
-          controller: _controller,
-          cardsCount: tasks.length,
-          isLoop: false,
-          numberOfCardsDisplayed: tasks.length >= 3 ? 3 : tasks.length,
-          threshold: risk == RiskLevel.high ? 90 : 50,
-          allowedSwipeDirection: AllowedSwipeDirection.only(
-            right: !locked,
-            left: true,
-            up: false, // inspect is tap-only; an up-swipe cannot be cancelled
-            down: true,
-          ),
-          backCardOffset: const Offset(0, -24),
-          onSwipe: _onSwipe,
-          cardBuilder: (context, index, percentThresholdX, percentThresholdY) {
-            final task = tasks[index];
-            return _ThresholdHaptic(
-              percentThresholdX: percentThresholdX,
-              percentThresholdY: percentThresholdY,
-              child: TaskCardView(
-                task: task,
-                timeAgo: timeAgo,
-                swipePercentX: percentThresholdX,
-                swipePercentY: percentThresholdY,
-                onQuickAction: (binding) => _triage(
-                  task,
-                  actionName: binding.actionName,
-                  data: binding.payload,
-                  source: ActionSource.quickChip,
-                ),
-                onInspect: () => _inspect(task),
-              ),
-            );
-          },
-        ),
-        // Bottom action bar (I-134): same movements as the gestures via
-        // CardSwiperController.swipe(); on locked cards the ✓ slot becomes
-        // the hold-to-confirm ring (I-103).
-        Positioned(
-          left: 0,
-          right: 0,
-          bottom: 10,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        _stackSize = constraints.biggest;
+        // CardSwiper treats `threshold` as a pixel distance here; the
+        // second stage (I-101) is ~85% of the card width.
+        final thresholdPx = risk == RiskLevel.high ? 90 : 50;
+        final cardWidth = constraints.maxWidth - 40;
+        final secondStage =
+            ((0.85 * cardWidth) / thresholdPx * 100).ceil();
+        return Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: _handlePointerDown,
+          onPointerMove: _handlePointerMove,
+          onPointerUp: _handlePointerUp,
+          onPointerCancel: _handlePointerCancel,
+          child: Stack(
             children: [
-              _BarAction(
-                icon: Icons.close,
-                label: top.onSwipeLeft?.label ?? '拒否',
-                onTap: () =>
-                    _controller.swipe(CardSwiperDirection.left),
-              ),
-              _BarAction(
-                icon: Icons.snooze,
-                label: 'あとで',
-                onTap: () =>
-                    _controller.swipe(CardSwiperDirection.bottom),
-              ),
-              if (locked)
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    HoldConfirmButton(
-                      label: top.onSwipeRight?.label ?? 'Approve',
-                      onConfirmed: () => _triage(
-                        top,
-                        actionName:
-                            top.onSwipeRight?.actionName ?? 'approve',
-                        data: top.onSwipeRight?.payload,
-                        source: ActionSource.holdConfirm,
-                      ),
-                    ),
-                    const Text(
-                      '長押しで承認',
-                      style:
-                          TextStyle(fontSize: 10, color: Colors.white38),
-                    ),
-                  ],
-                )
-              else
-                _BarAction(
-                  icon: Icons.check,
-                  label: top.onSwipeRight?.label ?? '承認',
-                  onTap: () =>
-                      _controller.swipe(CardSwiperDirection.right),
+              CardSwiper(
+                controller: _controller,
+                cardsCount: tasks.length,
+                isLoop: false,
+                isDisabled: _dropMode,
+                numberOfCardsDisplayed:
+                    tasks.length >= 3 ? 3 : tasks.length,
+                threshold: thresholdPx,
+                allowedSwipeDirection: AllowedSwipeDirection.only(
+                  right: !locked,
+                  left: true,
+                  up: false, // inspect is tap-only; an up-swipe cannot be cancelled
+                  down: true,
                 ),
+                backCardOffset: const Offset(0, -24),
+                onSwipe: _onSwipe,
+                cardBuilder:
+                    (context, index, percentThresholdX, percentThresholdY) {
+                  final task = tasks[index];
+                  return SwipeThresholdHaptic(
+                    percentThresholdX: percentThresholdX,
+                    percentThresholdY: percentThresholdY,
+                    secondThreshold: secondStage,
+                    onSecondStage: (active, right) => _secondStage =
+                        active ? (right ? 'right' : 'left') : null,
+                    child: TaskCardView(
+                      task: task,
+                      timeAgo: timeAgo,
+                      swipePercentX: percentThresholdX,
+                      swipePercentY: percentThresholdY,
+                      secondStageThreshold: secondStage,
+                      onQuickAction: (binding) => _triage(
+                        task,
+                        actionName: binding.actionName,
+                        data: binding.payload,
+                        source: ActionSource.quickChip,
+                      ),
+                      onInspect: () => _inspect(task),
+                    ),
+                  );
+                },
+              ),
+              if (_dropMode)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: DropZoneOverlay(hovered: _dropHover),
+                  ),
+                ),
+              // Bottom action bar (I-134): same movements as the gestures via
+              // CardSwiperController.swipe(); on locked cards the ✓ slot becomes
+              // the hold-to-confirm ring (I-103).
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 10,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    _BarAction(
+                      icon: Icons.close,
+                      label: top.onSwipeLeft?.label ?? '拒否',
+                      onTap: () =>
+                          _controller.swipe(CardSwiperDirection.left),
+                    ),
+                    _BarAction(
+                      icon: Icons.snooze,
+                      label: 'あとで',
+                      onTap: () =>
+                          _controller.swipe(CardSwiperDirection.bottom),
+                    ),
+                    if (locked)
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          HoldConfirmButton(
+                            label: top.onSwipeRight?.label ?? 'Approve',
+                            onConfirmed: () => _triage(
+                              top,
+                              actionName:
+                                  top.onSwipeRight?.actionName ?? 'approve',
+                              data: top.onSwipeRight?.payload,
+                              source: ActionSource.holdConfirm,
+                            ),
+                          ),
+                          const Text(
+                            '長押しで承認',
+                            style:
+                                TextStyle(fontSize: 10, color: Colors.white38),
+                          ),
+                        ],
+                      )
+                    else
+                      _BarAction(
+                        icon: Icons.check,
+                        label: top.onSwipeRight?.label ?? '承認',
+                        onTap: () =>
+                            _controller.swipe(CardSwiperDirection.right),
+                      ),
+                  ],
+                ),
+              ),
             ],
           ),
-        ),
-      ],
+        );
+      },
     );
+  }
+
+  // ------------------------------------------------------------------
+  // Drop zones (I-108): hold the card ~400ms, then drag to a corner.
+
+  bool _inCardArea(Offset p) =>
+      _stackSize.height > 0 && p.dy < _stackSize.height - 100;
+
+  void _handlePointerDown(PointerDownEvent event) {
+    _pointers[event.pointer] = event.localPosition;
+    if (_pointers.length >= 2) {
+      // Two fingers: pinch, never drop.
+      _dropTimer?.cancel();
+      _dropTimer = null;
+      _pinchBase = _pointerDistance();
+      return;
+    }
+    if (_overview || !_inCardArea(event.localPosition)) return;
+    _pointerDown = event.localPosition;
+    _dropTimer?.cancel();
+    _dropTimer = Timer(const Duration(milliseconds: 400), _armDrop);
+  }
+
+  void _handlePointerMove(PointerMoveEvent event) {
+    final tracked = _pointers.containsKey(event.pointer);
+    _pointers[event.pointer] = event.localPosition;
+
+    if (_pointers.length >= 2) {
+      final base = _pinchBase;
+      if (base != null && base > 0 && _pointerDistance() < base * 0.7) {
+        _dropTimer?.cancel();
+        _dropTimer = null;
+        _pointers.clear();
+        _pinchBase = null;
+        setState(() => _overview = true);
+      }
+      return;
+    }
+
+    if (_dropMode) {
+      setState(() => _dropHover = _zoneFor(event.localPosition));
+      return;
+    }
+    if (tracked && _dropTimer != null) {
+      if ((event.localPosition - _pointerDown).distance > 16) {
+        _dropTimer?.cancel();
+        _dropTimer = null;
+      }
+    }
+  }
+
+  void _handlePointerUp(PointerEvent event) {
+    _pointers.remove(event.pointer);
+    _dropTimer?.cancel();
+    _dropTimer = null;
+    _pinchBase = null;
+    if (!_dropMode) return;
+    final zone = _dropHover;
+    _exitDropMode();
+    if (zone != null) _runDropAction(zone);
+  }
+
+  void _handlePointerCancel(PointerCancelEvent event) {
+    _pointers.remove(event.pointer);
+    _dropTimer?.cancel();
+    _dropTimer = null;
+    _pinchBase = null;
+    _exitDropMode();
+  }
+
+  double _pointerDistance() {
+    final points = _pointers.values.toList();
+    if (points.length < 2) return 0;
+    return (points[0] - points[1]).distance;
+  }
+
+  void _armDrop() {
+    if (!mounted) return;
+    HapticFeedback.selectionClick();
+    setState(() {
+      _dropMode = true;
+      _dropHover = _zoneFor(_pointerDown);
+    });
+  }
+
+  void _exitDropMode() {
+    if (!_dropMode && _dropHover == null) return;
+    if (!mounted) return;
+    setState(() {
+      _dropMode = false;
+      _dropHover = null;
+    });
+  }
+
+  DropAction? _zoneFor(Offset p) {
+    if (_stackSize.isEmpty) return null;
+    final w = _stackSize.width;
+    final h = _stackSize.height;
+    final margin = _stackSize.shortestSide * 0.45;
+    if ((p - const Offset(0, 0)).distance < margin) return DropAction.delegate;
+    if ((p - Offset(w, 0)).distance < margin) return DropAction.snoozeHour;
+    if ((p - Offset(0, h)).distance < margin) return DropAction.ask;
+    if ((p - Offset(w, h)).distance < margin) return DropAction.snoozeMorning;
+    return null;
+  }
+
+  void _runDropAction(DropAction action) {
+    final repo = context.read<TaskRepository>();
+    final tasks = repo.stack;
+    if (tasks.isEmpty) return;
+    final top = tasks.first;
+    switch (action) {
+      case DropAction.snoozeHour:
+        HapticFeedback.mediumImpact();
+        repo.snooze(top.taskId);
+        _showToast('1時間後にもう一度（端末内スヌーズ）');
+        break;
+      case DropAction.snoozeMorning:
+        HapticFeedback.mediumImpact();
+        repo.snooze(top.taskId);
+        _showToast('明日の朝にもう一度（端末内スヌーズ）');
+        break;
+      case DropAction.ask:
+        _inspect(top);
+        break;
+      case DropAction.delegate:
+        _showToast('同僚に回す: まだ接続されていません');
+        break;
+    }
   }
 
   FutureOr<bool> _onSwipe(
@@ -253,6 +467,8 @@ class _TriageScreenState extends State<TriageScreen> {
     final tasks = repo.stack;
     if (previousIndex < 0 || previousIndex >= tasks.length) return false;
     final task = tasks[previousIndex];
+    final secondStage = _secondStage;
+    _secondStage = null;
     // Locked cards (critical + irreversible) cannot be approved by
     // swipe — belt-and-braces guard in case the direction filter misses.
     if (direction == CardSwiperDirection.right &&
@@ -261,14 +477,20 @@ class _TriageScreenState extends State<TriageScreen> {
     }
     if (direction == CardSwiperDirection.right) {
       final binding = task.onSwipeRight;
+      final propose = secondStage == 'right';
+      final data = <String, dynamic>{
+        ...?binding?.payload,
+        if (propose) 'proposeAutomation': true,
+      };
       _triage(
         task,
         actionName: binding?.actionName ?? 'approve',
-        data: binding?.payload,
-        source: ActionSource.swipeGesture,
+        data: data,
+        source:
+            propose ? ActionSource.twoStageSwipe : ActionSource.swipeGesture,
       );
     } else if (direction == CardSwiperDirection.left) {
-      _rejectWithReasons(task);
+      _rejectWithReasons(task, muteSimilar: secondStage == 'left');
     } else if (direction == CardSwiperDirection.bottom) {
       repo.snooze(task.taskId);
     } else {
@@ -279,31 +501,40 @@ class _TriageScreenState extends State<TriageScreen> {
 
   /// Reject path (I-118): when the agent supplied `rejectReasons`, a
   /// short-lived chip row asks why before the decision leaves. Ignoring
-  /// it (timeout or dismiss) still confirms without a reason.
-  Future<void> _rejectWithReasons(TaskCard task) async {
+  /// it (timeout or dismiss) still confirms without a reason. A left
+  /// second-stage swipe (I-101) also asks to mute similar proposals.
+  Future<void> _rejectWithReasons(
+    TaskCard task, {
+    bool muteSimilar = false,
+  }) async {
     final binding = task.onSwipeLeft;
-    var data = binding?.payload;
+    Map<String, dynamic>? data = binding?.payload;
     if (task.rejectReasons.isNotEmpty && mounted) {
-      final reasonId = await showModalBottomSheet<String>(
-        context: context,
-        builder: (context) => _RejectReasonSheet(reasons: task.rejectReasons),
-      );
+      final reasonId = await showRejectReasonSheet(context, task.rejectReasons);
       if (reasonId != null) {
         data = <String, dynamic>{
-          if (data != null) ...data,
+          ...?data,
           'reason': reasonId,
         };
       }
+    }
+    if (muteSimilar) {
+      data = <String, dynamic>{
+        ...?data,
+        'muteSimilar': true,
+      };
     }
     _triage(
       task,
       actionName: binding?.actionName ?? 'reject',
       data: data,
-      source: ActionSource.swipeGesture,
+      source: muteSimilar
+          ? ActionSource.twoStageSwipe
+          : ActionSource.swipeGesture,
     );
   }
-
 }
+
 String timeAgo(DateTime time) {
   final diff = DateTime.now().difference(time);
   if (diff.inSeconds < 60) return 'now';
@@ -371,112 +602,6 @@ class _BarAction extends StatelessWidget {
           style: const TextStyle(fontSize: 10, color: Colors.white38),
         ),
       ],
-    );
-  }
-}
-
-/// Fires one `selectionClick` the moment the drag crosses the swipe
-/// threshold (I-131). `percentThreshold*` are 0-100+ values handed down
-/// by CardSwiper; the click re-arms only after the card falls back below
-/// a lower bound so a jittery finger cannot spam the click.
-class _ThresholdHaptic extends StatefulWidget {
-  final int percentThresholdX;
-  final int percentThresholdY;
-  final Widget child;
-
-  const _ThresholdHaptic({
-    required this.percentThresholdX,
-    required this.percentThresholdY,
-    required this.child,
-  });
-
-  @override
-  State<_ThresholdHaptic> createState() => _ThresholdHapticState();
-}
-
-class _ThresholdHapticState extends State<_ThresholdHaptic> {
-  bool _armed = true;
-
-  @override
-  void didUpdateWidget(_ThresholdHaptic oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    final percent = max(
-      widget.percentThresholdX.abs(),
-      widget.percentThresholdY.abs(),
-    );
-    if (_armed && percent >= 100) {
-      _armed = false;
-      HapticFeedback.selectionClick();
-    } else if (!_armed && percent < 40) {
-      _armed = true;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => widget.child;
-}
-
-/// Chip row of agent-supplied reject reasons (I-118). Tapping a chip
-/// completes with its id; dismissing or the 4s timer completes with null
-/// (reject without a reason).
-class _RejectReasonSheet extends StatefulWidget {
-  final List<RejectReason> reasons;
-
-  const _RejectReasonSheet({required this.reasons});
-
-  @override
-  State<_RejectReasonSheet> createState() => _RejectReasonSheetState();
-}
-
-class _RejectReasonSheetState extends State<_RejectReasonSheet> {
-  bool _done = false;
-
-  @override
-  void initState() {
-    super.initState();
-    Timer(const Duration(seconds: 4), () {
-      if (!_done && mounted) Navigator.of(context).pop();
-    });
-  }
-
-  void _pick(String? id) {
-    if (_done) return;
-    _done = true;
-    Navigator.of(context).pop(id);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              '却下の理由 (任意)',
-              style: TextStyle(fontSize: 13, color: Colors.white70),
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final reason in widget.reasons)
-                  ActionChip(
-                    label: Text(reason.label),
-                    onPressed: () => _pick(reason.id),
-                  ),
-                ActionChip(
-                  label: const Text('理由なしで却下'),
-                  onPressed: () => _pick(null),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

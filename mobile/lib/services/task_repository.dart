@@ -258,6 +258,16 @@ class TaskRepository extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Moves a card to the top of the stack (I-105 pinch overview: tapping
+  /// a tile brings that card back into focus).
+  void bringToTop(String taskId) {
+    final index = _stack.indexWhere((t) => t.taskId == taskId);
+    if (index <= 0) return;
+    final task = _stack.removeAt(index);
+    _stack.insert(0, task);
+    notifyListeners();
+  }
+
   // ------------------------------------------------------------------
   // SSE events
 

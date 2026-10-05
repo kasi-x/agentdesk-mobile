@@ -27,12 +27,23 @@ class TriageActionReply {
 
   factory TriageActionReply.fromJson(dynamic raw) {
     if (raw is! Map) throw const FormatException('reply must be an object');
+    String req(String key) {
+      final v = raw[key];
+      if (v is! String || v.isEmpty) {
+        throw FormatException('reply.$key must be a non-empty string');
+      }
+      return v;
+    }
+
+    final source = raw['source'];
     return TriageActionReply(
-      taskId: raw['taskId'] as String,
-      nonce: raw['nonce'] as String,
-      actionName: raw['actionName'] as String,
-      timestamp: DateTime.parse(raw['timestamp'] as String),
-      source: (raw['source'] as String?) ?? ActionSource.swipeGesture,
+      taskId: req('taskId'),
+      nonce: req('nonce'),
+      actionName: req('actionName'),
+      timestamp: DateTime.parse(req('timestamp')),
+      source: source is String && source.isNotEmpty
+          ? source
+          : ActionSource.swipeGesture,
       data: raw['data'] is Map
           ? Map<String, dynamic>.from(raw['data'] as Map)
           : const <String, dynamic>{},
@@ -50,4 +61,10 @@ abstract final class ActionSource {
   static const String snoozeLocal = 'snooze_local';
   /// Hold-to-confirm ring on locked cards (I-103).
   static const String holdConfirm = 'hold_confirm';
+  /// Server-side snooze (`action: "snooze"`, synced across devices).
+  static const String snooze = 'snooze';
+  /// Second stage of a two-stage swipe (I-101).
+  static const String twoStageSwipe = 'two_stage_swipe';
+  /// Bundled approval via `POST /api/v1/actions/bulk` (I-201).
+  static const String bulk = 'bulk';
 }

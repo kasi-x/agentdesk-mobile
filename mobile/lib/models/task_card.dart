@@ -205,9 +205,46 @@ class TaskContext {
   }
 }
 
+/// Inline value editing hint (I-114): the named component may be
+/// adjusted in place (number stepper / datetime picker) before approving.
+class EditableHint {
+  final String componentId;
+  final String kind;
+  final double? min;
+  final double? max;
+  final double? step;
+
+  const EditableHint({
+    required this.componentId,
+    required this.kind,
+    this.min,
+    this.max,
+    this.step,
+  });
+
+  factory EditableHint.fromJson(dynamic raw) {
+    if (raw is! Map) return const EditableHint(componentId: '', kind: 'number');
+    double? number(String key) {
+      final value = raw[key];
+      return value is num ? value.toDouble() : null;
+    }
+
+    final componentId = raw['componentId'];
+    final kind = raw['kind'];
+    return EditableHint(
+      componentId: componentId is String ? componentId : '',
+      kind: kind is String && kind.isNotEmpty ? kind : 'number',
+      min: number('min'),
+      max: number('max'),
+      step: number('step'),
+    );
+  }
+}
+
 class TaskCard {
   final String taskId;
   final String nonce;
+  final int protocolVersion;
   final AgentInfo agent;
   final double confidence;
   final List<String> confidenceReasons;
@@ -233,10 +270,22 @@ class TaskCard {
   final String? onExpire;
   /// Structured back-of-card context (裏面) for the details panel.
   final TaskContext? context;
+  /// Cards sharing a key are a bundle (I-201); may be rendered as one
+  /// summary card and triaged together.
+  final String? groupKey;
+  /// approve | choose | fill — what kind of decision the card asks for.
+  final String decisionKind;
+  /// Inline value editing hint (I-114); null = not editable in place.
+  final EditableHint? editable;
+  /// Hub-computed urgency score (I-206); higher = more urgent.
+  final double? priority;
+  /// Hub marker on re-broadcasts after an agent update (I-204).
+  final bool revised;
 
   const TaskCard({
     required this.taskId,
     required this.nonce,
+    this.protocolVersion = 1,
     required this.agent,
     required this.confidence,
     required this.confidenceReasons,
@@ -254,12 +303,23 @@ class TaskCard {
     this.expiresAt,
     this.onExpire,
     this.context,
+    this.groupKey,
+    this.decisionKind = 'approve',
+    this.editable,
+    this.priority,
+    this.revised = false,
   });
 
   factory TaskCard.fromJson(dynamic raw) {
     if (raw is! Map) {
-      return TaskCard.fromJson(<String, dynamic>{});
+      return TaskCard.fromJson(const <String, dynamic>{});
     }
+    // Deep-sanitize before any field extraction: strings arriving with
+    // unpaired UTF-16 surrogates (malformed payloads) would crash Text
+    // rendering (FR-1.3). Wire data may also contain nested Maps that are
+    // unmodifiable or not Map<String, dynamic>; normalize recursively.
+    final wire = _sanitizeWire(raw);
+    raw = wire is Map ? wire : const <String, dynamic>{};
     final createdAtRaw = raw['createdAt'];
     final createdAt = DateTime.tryParse(createdAtRaw is String ? createdAtRaw : '') ?? DateTime.now();
     final actions = raw['actions'] is Map ? Map<String, dynamic>.from(raw['actions'] as Map) : const <String, dynamic>{};
@@ -267,6 +327,9 @@ class TaskCard {
       taskId: (raw['taskId'] as String?) ??
           'task_unknown_${DateTime.now().microsecondsSinceEpoch}',
       nonce: (raw['nonce'] as String?) ?? '',
+      protocolVersion: raw['protocolVersion'] is num
+          ? (raw['protocolVersion'] as num).toInt()
+          : 1,
       agent: AgentInfo.fromJson(raw['agent']),
       confidence: (raw['confidence'] as num?)?.toDouble() ?? 0.5,
       confidenceReasons: raw['confidenceReasons'] is List
@@ -300,6 +363,20 @@ class TaskCard {
       expiresAt: DateTime.tryParse(raw['expiresAt'] is String ? raw['expiresAt'] as String : ''),
       onExpire: raw['onExpire'] is String ? raw['onExpire'] as String : null,
       context: raw['context'] is Map ? TaskContext.fromJson(raw['context']) : null,
+      groupKey: raw['groupKey'] is String && (raw['groupKey'] as String).isNotEmpty
+          ? raw['groupKey'] as String
+          : null,
+      decisionKind:
+          raw['decisionKind'] is String && (raw['decisionKind'] as String).isNotEmpty
+              ? raw['decisionKind'] as String
+              : 'approve',
+      editable: raw['editable'] is Map
+          ? EditableHint.fromJson(raw['editable'])
+          : null,
+      priority: raw['priority'] is num
+          ? (raw['priority'] as num).toDouble()
+          : null,
+      revised: raw['revised'] is bool ? raw['revised'] as bool : false,
     );
   }
 
@@ -327,6 +404,7 @@ class TaskCard {
         'type': 'createTaskCard',
         'taskId': taskId,
         'nonce': nonce,
+        'protocolVersion': protocolVersion,
         'agent': <String, dynamic>{
           'name': agent.name,
           if (agent.avatarUrl != null) 'avatarUrl': agent.avatarUrl,
@@ -401,6 +479,18 @@ class TaskCard {
                 if (context!.sourceUrl != null) 'url': context!.sourceUrl,
               },
           },
+        if (groupKey != null) 'groupKey': groupKey,
+        if (decisionKind != 'approve') 'decisionKind': decisionKind,
+        if (editable != null)
+          'editable': <String, dynamic>{
+            'componentId': editable!.componentId,
+            'kind': editable!.kind,
+            if (editable!.min != null) 'min': editable!.min,
+            if (editable!.max != null) 'max': editable!.max,
+            if (editable!.step != null) 'step': editable!.step,
+          },
+        if (priority != null) 'priority': priority,
+        if (revised) 'revised': revised,
       };
 }
 
@@ -429,4 +519,57 @@ RiskLevel riskLevel(TaskCard task) {
     return RiskLevel.high;
   }
   return RiskLevel.normal;
+}
+
+/// Replaces unpaired UTF-16 surrogates in a wire string (FR-1.3).
+/// Valid surrogate pairs are preserved; lone halves become U+FFFD so the
+/// value can still be rendered without crashing the text pipeline.
+String _sanitizeString(String s) {
+  var dirty = false;
+  final units = s.codeUnits;
+  for (var i = 0; i < units.length; i++) {
+    final u = units[i];
+    if (u >= 0xD800 && u <= 0xDBFF) {
+      if (i + 1 < units.length && units[i + 1] >= 0xDC00 && units[i + 1] <= 0xDFFF) {
+        i++;
+      } else {
+        dirty = true;
+      }
+    } else if (u >= 0xDC00 && u <= 0xDFFF) {
+      dirty = true;
+    }
+  }
+  if (!dirty) return s;
+  final out = StringBuffer();
+  for (var i = 0; i < units.length; i++) {
+    final u = units[i];
+    if (u >= 0xD800 && u <= 0xDBFF) {
+      if (i + 1 < units.length && units[i + 1] >= 0xDC00 && units[i + 1] <= 0xDFFF) {
+        out.writeCharCode(u);
+        out.writeCharCode(units[++i]);
+      } else {
+        out.writeCharCode(0xFFFD);
+      }
+    } else if (u >= 0xDC00 && u <= 0xDFFF) {
+      out.writeCharCode(0xFFFD);
+    } else {
+      out.writeCharCode(u);
+    }
+  }
+  return out.toString();
+}
+
+/// Recursively sanitizes a decoded wire value: repairs unpaired
+/// surrogates in every string and normalizes Maps/Lists into mutable
+/// `Map<String, dynamic>` / `List<dynamic>` so downstream parsing is
+/// uniform regardless of the decoder used.
+Object? _sanitizeWire(Object? v) {
+  if (v is String) return _sanitizeString(v);
+  if (v is Map) {
+    return <String, dynamic>{
+      for (final e in v.entries) e.key.toString(): _sanitizeWire(e.value),
+    };
+  }
+  if (v is List) return v.map(_sanitizeWire).toList();
+  return v;
 }

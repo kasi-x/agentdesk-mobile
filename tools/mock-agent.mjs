@@ -4,15 +4,20 @@
 //
 //   node tools/mock-agent.mjs listen [--port 8799]
 //   node tools/mock-agent.mjs send   [--port 8799]
+//   node tools/mock-agent.mjs update [taskId] [--port 8799]
+//   node tools/mock-agent.mjs withdraw [taskId] [--port 8799]
+//   node tools/mock-agent.mjs result <taskId> [--wait 10]
 //
 // Env: HUB_URL (default http://127.0.0.1:8787), AGENT_TOKEN (default
-// dev-agent-token), CALLBACK_PORT (default 8799).
+// dev-agent-token), REPLY_SIGNING_SECRET (defaults to AGENT_TOKEN),
+// CALLBACK_PORT (default 8799).
 
 import crypto from "node:crypto";
 import http from "node:http";
 
 const HUB_URL = process.env.HUB_URL ?? "http://127.0.0.1:8787";
 const AGENT_TOKEN = process.env.AGENT_TOKEN ?? "dev-agent-token";
+const REPLY_SECRET = process.env.REPLY_SIGNING_SECRET ?? AGENT_TOKEN;
 const CALLBACK_PORT = Number(process.env.CALLBACK_PORT ?? 8799);
 
 const argPort = (flag, fallback) => {
@@ -20,7 +25,24 @@ const argPort = (flag, fallback) => {
   return i !== -1 && process.argv[i + 1] ? Number(process.argv[i + 1]) : fallback;
 };
 
+/** First positional argument after the command (ignores `--flag value`). */
+const positional = () =>
+  process.argv[3] !== undefined && !process.argv[3].startsWith("--")
+    ? process.argv[3]
+    : undefined;
+
 const shortId = () => `task_${crypto.randomUUID().slice(0, 8)}`;
+
+async function hub(path, { method = "POST", body, token = AGENT_TOKEN } = {}) {
+  const headers = { authorization: `Bearer ${token}` };
+  if (body !== undefined) headers["content-type"] = "application/json";
+  const res = await fetch(`${HUB_URL}${path}`, {
+    method,
+    headers,
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  return { status: res.status, text: await res.text() };
+}
 
 function sampleCards(callbackBase) {
   return [
@@ -144,6 +166,7 @@ function sampleCards(callbackBase) {
       confidence: 0.99,
       severity: "info",
       summary: "迷惑メール判定: 削除してよいか確認",
+      groupKey: "inbox_spam",
       replyUrl: `${callbackBase}/callback/inbox`,
       components: [
         {
@@ -185,20 +208,121 @@ async function send(port) {
   const callbackBase = `http://127.0.0.1:${port}`;
   const cards = sampleCards(callbackBase);
   for (const card of cards) {
-    const res = await fetch(`${HUB_URL}/api/v1/tasks`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${AGENT_TOKEN}`,
-      },
-      body: JSON.stringify(card),
-    });
-    const body = await res.text();
-    console.log(`${res.status}  ${card.taskId}  ${card.summary}${res.ok ? "" : ` — ${body}`}`);
+    const { status, text } = await hub("/api/v1/tasks", { body: card });
+    console.log(`${status}  ${card.taskId}  ${card.summary}${status < 300 ? "" : ` — ${text}`}`);
   }
   console.log(
     `\n✅ ${cards.length} cards sent to ${HUB_URL}.\nStart 'node tools/mock-agent.mjs listen' and swipe them in the app — triage replies will be printed there.\n(期限テスト: calendar は3分後に自動承認、inbox は90秒後に自動破棄 — 触れずに待つと listen に on_expire の返信が届きます)`,
   );
+}
+
+/** I-204: replace a pending card with an updated one (rotates the nonce). */
+async function update(taskId, port) {
+  const callbackBase = `http://127.0.0.1:${port}`;
+  let id = taskId;
+  if (!id) {
+    id = shortId();
+    const card = {
+      ...sampleCards(callbackBase)[0],
+      taskId: id,
+      summary: "（更新前）ミーティングの日程変更リクエスト",
+    };
+    const created = await hub("/api/v1/tasks", { body: card });
+    console.log(`create  ${created.status}  ${id}`);
+  }
+  const replacement = {
+    type: "createTaskCard",
+    agent: { name: "Calendar & Meeting Agent" },
+    confidence: 0.88,
+    severity: "warning",
+    summary: "（更新）会議の時間がさらに変更されました",
+    groupKey: "calendar_meeting",
+    replyUrl: `${callbackBase}/callback/calendar`,
+    components: [
+      {
+        id: "diff_view",
+        component: "DiffBox",
+        properties: {
+          title: "定例ミーティング時間",
+          before: "16:30",
+          after: "17:00",
+          highlight: "warning",
+        },
+      },
+    ],
+    actions: {
+      onSwipeRight: {
+        actionName: "approve",
+        label: "17:00 に変更する",
+        payload: { decision: "ACCEPT", newTime: "17:00" },
+      },
+      onSwipeLeft: {
+        actionName: "reject",
+        label: "却下",
+        payload: { decision: "DECLINE" },
+      },
+    },
+  };
+  const { status, text } = await hub(`/api/v1/tasks/${encodeURIComponent(id)}/update`, {
+    body: replacement,
+  });
+  console.log(`update  ${status}  ${id} — ${text}`);
+  if (status === 200) {
+    const nonce = JSON.parse(text).nonce;
+    console.log(`↺ nonce rotated → ${nonce} (the old one now answers 409 bad_nonce)`);
+  }
+}
+
+/** I-205: cancel a pending card from the agent side. */
+async function withdraw(taskId, port) {
+  let id = taskId;
+  if (!id) {
+    id = shortId();
+    const card = {
+      ...sampleCards(`http://127.0.0.1:${port}`)[2],
+      taskId: id,
+      summary: "（取り下げテスト）判断不要になりました",
+    };
+    const created = await hub("/api/v1/tasks", { body: card });
+    console.log(`create  ${created.status}  ${id}`);
+  }
+  const { status, text } = await hub(`/api/v1/tasks/${encodeURIComponent(id)}/withdraw`);
+  console.log(`withdraw  ${status}  ${id} — ${text}`);
+}
+
+/** I-901: resolve the task's outcome, long-polling when `--wait` > 0. */
+async function result(taskId, wait) {
+  if (!taskId) {
+    console.error("usage: node tools/mock-agent.mjs result <taskId> [--wait 10]");
+    process.exit(1);
+  }
+  const { status, text } = await hub(
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/result?wait=${wait}`,
+    { method: "GET" },
+  );
+  console.log(`result  ${status}`);
+  try {
+    console.log(JSON.stringify(JSON.parse(text), null, 2));
+  } catch {
+    console.log(text);
+  }
+}
+
+/** I-801: verify the hub's `X-AgentDesk-Signature: t=<ts>,v1=<hex>` header. */
+function signatureBadge(req, raw) {
+  const header = req.headers["x-agentdesk-signature"];
+  const event = req.headers["x-agentdesk-event"];
+  if (!header) return "⚠️  unsigned (no X-AgentDesk-Signature)";
+  const match = /^t=(\d+),v1=([0-9a-f]+)$/.exec(header);
+  if (!match) return `⚠️  malformed signature: ${header}`;
+  const expected = crypto
+    .createHmac("sha256", REPLY_SECRET)
+    .update(`${match[1]}.${raw}`)
+    .digest("hex");
+  const got = Buffer.from(match[2], "hex");
+  const want = Buffer.from(expected, "hex");
+  const ok = got.length === want.length && crypto.timingSafeEqual(got, want);
+  return ok ? `🔐 signature verified (${event ?? "unknown"})` : "🚨 signature MISMATCH";
 }
 
 function listen(port) {
@@ -207,6 +331,7 @@ function listen(port) {
     req.on("data", (chunk) => (raw += chunk));
     req.on("end", () => {
       console.log(`\n📥 ${req.method} ${req.url}`);
+      console.log(signatureBadge(req, raw));
       try {
         console.log(JSON.stringify(JSON.parse(raw || "{}"), null, 2));
       } catch {
@@ -228,7 +353,15 @@ if (command === "listen") {
   listen(argPort("--port", CALLBACK_PORT));
 } else if (command === "send") {
   await send(argPort("--port", CALLBACK_PORT));
+} else if (command === "update") {
+  await update(positional(), argPort("--port", CALLBACK_PORT));
+} else if (command === "withdraw") {
+  await withdraw(positional(), argPort("--port", CALLBACK_PORT));
+} else if (command === "result") {
+  await result(positional(), argPort("--wait", 0));
 } else {
-  console.error("usage: node tools/mock-agent.mjs <send|listen> [--port 8799]");
+  console.error(
+    "usage: node tools/mock-agent.mjs <send|listen|update|withdraw|result> [args] [--port 8799]",
+  );
   process.exit(1);
 }

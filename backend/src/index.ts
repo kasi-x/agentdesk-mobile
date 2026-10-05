@@ -1,5 +1,6 @@
 import {
   validateActionReply,
+  validateBulkRequest,
   validateTaskCard,
   validateUndoRequest,
 } from "./protocol";
@@ -7,6 +8,16 @@ import { json } from "./http";
 import type { Env } from "./env";
 
 export { TaskHub } from "./task-hub";
+
+/** Rebuild a DO JSON subresponse so cors() header mutation never touches
+ *  an immutable subresponse (same-origin browser POSTs surface this as a
+ *  500). */
+function rebuilt(doRes: Response): Response {
+  return new Response(doRes.body, {
+    status: doRes.status,
+    headers: { "content-type": "application/json" },
+  });
+}
 
 export default {
   async fetch(request, env): Promise<Response> {
@@ -65,11 +76,7 @@ export default {
         );
         // Rebuild so cors() header mutation never touches an immutable
         // subresponse (same-origin browser POSTs surface this as a 500).
-        const res = new Response(await doRes.text(), {
-          status: doRes.status,
-          headers: { "content-type": "application/json" },
-        });
-        return cors(res, request, env);
+        return cors(rebuilt(doRes), request, env);
       }
 
       if (url.pathname === "/api/v1/actions/undo" && request.method === "POST") {
@@ -90,11 +97,78 @@ export default {
             headers: { "content-type": "application/json" },
           },
         );
-        const res = new Response(await doRes.text(), {
-          status: doRes.status,
-          headers: { "content-type": "application/json" },
-        });
+        const res = rebuilt(doRes);
         return cors(res, request, env);
+      }
+
+      if (url.pathname === "/api/v1/actions/bulk" && request.method === "POST") {
+        if (!authorized(request, env.CLIENT_TOKEN)) return unauthorized(request, env);
+        const parsed = validateBulkRequest(await request.json());
+        if (!parsed.ok) {
+          return cors(
+            json({ error: "invalid_payload", detail: parsed.error }, 400),
+            request,
+            env,
+          );
+        }
+        const doRes = await env.TASK_HUB.getByName("global").fetch(
+          "https://task-hub/bulk",
+          {
+            method: "POST",
+            body: JSON.stringify(parsed.value),
+            headers: { "content-type": "application/json" },
+          },
+        );
+        return cors(rebuilt(doRes), request, env);
+      }
+
+      // Agent-side task management (I-204/I-205) + SDK long-poll (I-901).
+      const taskRoute = url.pathname.match(
+        /^\/api\/v1\/tasks\/([^/]+)\/(update|withdraw|result)$/,
+      );
+      if (taskRoute && !authorized(request, env.AGENT_TOKEN)) {
+        return unauthorized(request, env);
+      }
+      if (taskRoute && taskRoute[2] === "result" && request.method === "GET") {
+        const taskId = decodeURIComponent(taskRoute[1]);
+        const wait = url.searchParams.get("wait") ?? "0";
+        const doRes = await env.TASK_HUB.getByName("global").fetch(
+          `https://task-hub/result?taskId=${encodeURIComponent(taskId)}&wait=${encodeURIComponent(wait)}`,
+        );
+        return cors(rebuilt(doRes), request, env);
+      }
+      if (taskRoute && taskRoute[2] === "update" && request.method === "POST") {
+        const taskId = decodeURIComponent(taskRoute[1]);
+        const parsed = validateTaskCard(await request.json());
+        if (!parsed.ok) {
+          return cors(
+            json({ error: "invalid_payload", detail: parsed.error }, 400),
+            request,
+            env,
+          );
+        }
+        parsed.value.taskId = taskId;
+        const doRes = await env.TASK_HUB.getByName("global").fetch(
+          "https://task-hub/update",
+          {
+            method: "POST",
+            body: JSON.stringify(parsed.value),
+            headers: { "content-type": "application/json" },
+          },
+        );
+        return cors(rebuilt(doRes), request, env);
+      }
+      if (taskRoute && taskRoute[2] === "withdraw" && request.method === "POST") {
+        const taskId = decodeURIComponent(taskRoute[1]);
+        const doRes = await env.TASK_HUB.getByName("global").fetch(
+          "https://task-hub/withdraw",
+          {
+            method: "POST",
+            body: JSON.stringify({ taskId }),
+            headers: { "content-type": "application/json" },
+          },
+        );
+        return cors(rebuilt(doRes), request, env);
       }
 
       if (url.pathname === "/api/v1/stream" && request.method === "GET") {

@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  computePriority,
   decideAction,
   decideUndo,
   expiryDue,
+  PROTOCOL_VERSION,
   StoredTask,
   validateActionReply,
+  validateBulkRequest,
   validateTaskCard,
   validateUndoRequest,
 } from "./protocol";
@@ -434,5 +437,179 @@ describe("expiry policy (I-203)", () => {
         Date.now(),
       ),
     ).toEqual({ action: "drop" });
+  });
+});
+
+describe("protocolVersion (I-606)", () => {
+  it("defaults missing versions to the current one", () => {
+    const result = validateTaskCard(baseCard);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.protocolVersion).toBe(PROTOCOL_VERSION);
+  });
+
+  it("keeps an explicit version and rejects malformed ones", () => {
+    const explicit = validateTaskCard({ ...baseCard, protocolVersion: 1 });
+    expect(explicit.ok).toBe(true);
+    if (!explicit.ok) return;
+    expect(explicit.value.protocolVersion).toBe(1);
+    expect(validateTaskCard({ ...baseCard, protocolVersion: 0 }).ok).toBe(false);
+    expect(validateTaskCard({ ...baseCard, protocolVersion: "1" }).ok).toBe(false);
+    expect(validateTaskCard({ ...baseCard, protocolVersion: 1.5 }).ok).toBe(false);
+  });
+});
+
+describe("groupKey / decisionKind / editable (I-201)", () => {
+  it("passes groupKey, decisionKind and editable through", () => {
+    const result = validateTaskCard({
+      ...baseCard,
+      groupKey: "inbox_spam",
+      decisionKind: "fill",
+      editable: {
+        componentId: "amount",
+        kind: "number",
+        min: 0,
+        max: 120,
+        step: 5,
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.groupKey).toBe("inbox_spam");
+    expect(result.value.decisionKind).toBe("fill");
+    expect(result.value.editable).toEqual({
+      componentId: "amount",
+      kind: "number",
+      min: 0,
+      max: 120,
+      step: 5,
+    });
+  });
+
+  it("rejects malformed grouping / decision / editable fields", () => {
+    expect(validateTaskCard({ ...baseCard, groupKey: "" }).ok).toBe(false);
+    expect(validateTaskCard({ ...baseCard, groupKey: 7 }).ok).toBe(false);
+    expect(validateTaskCard({ ...baseCard, decisionKind: "maybe" }).ok).toBe(false);
+    expect(
+      validateTaskCard({ ...baseCard, editable: { componentId: "", kind: "number" } }).ok,
+    ).toBe(false);
+    expect(
+      validateTaskCard({ ...baseCard, editable: { componentId: "x", kind: "text" } }).ok,
+    ).toBe(false);
+    expect(
+      validateTaskCard({ ...baseCard, editable: { componentId: "x", kind: "number", step: "1" } }).ok,
+    ).toBe(false);
+  });
+
+  it("omits the optional fields when absent", () => {
+    const result = validateTaskCard(baseCard);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.groupKey).toBeUndefined();
+    expect(result.value.decisionKind).toBeUndefined();
+    expect(result.value.editable).toBeUndefined();
+  });
+});
+
+describe("server-side snooze", () => {
+  it("normalizes a snooze reply and requires a valid until", () => {
+    const until = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const ok = validateActionReply({ taskId: "t", nonce: "n", action: "snooze", until });
+    expect(ok.ok).toBe(true);
+    if (!ok.ok) return;
+    expect(ok.value.action).toBe("snooze");
+    expect(ok.value.until).toBe(until);
+    expect(ok.value.source).toBe("snooze");
+
+    expect(validateActionReply({ taskId: "t", nonce: "n", action: "snooze" }).ok).toBe(false);
+    expect(
+      validateActionReply({ taskId: "t", nonce: "n", action: "snooze", until: "soon" }).ok,
+    ).toBe(false);
+    expect(
+      validateActionReply({
+        taskId: "t",
+        nonce: "n",
+        action: "snooze",
+        until: new Date(Date.now() + 8 * 24 * 60 * 60 * 1000).toISOString(),
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateActionReply({ taskId: "t", nonce: "n", action: "explode" }).ok,
+    ).toBe(false);
+  });
+
+  it("decides snooze only on a pending task with a matching nonce", () => {
+    const reply = {
+      taskId: "task_x",
+      nonce: "tok_1",
+      actionName: "snooze",
+      timestamp: "2026-10-04T00:00:00Z",
+      source: "snooze",
+      action: "snooze" as const,
+      until: "2026-10-05T00:00:00Z",
+    };
+    expect(decideAction(storedFixture(), reply)).toEqual({ kind: "snooze" });
+    expect(
+      decideAction(storedFixture({ status: "committing", commitAt: 1 }), reply),
+    ).toEqual({ kind: "conflict", reason: "already_processed" });
+    expect(decideAction(storedFixture(), { ...reply, nonce: "tok_other" })).toEqual({
+      kind: "bad_nonce",
+    });
+  });
+});
+
+describe("computePriority (I-123/I-206)", () => {
+  const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+
+  function card(overrides: Record<string, unknown>) {
+    const result = validateTaskCard({ ...baseCard, ...overrides });
+    if (!result.ok) throw new Error(`fixture invalid: ${result.error}`);
+    return result.value;
+  }
+
+  it("scores severity, confidence and wait time", () => {
+    // info 10 + (1-0.94)*10 + no wait
+    expect(computePriority(card({}), now, now)).toBeCloseTo(10.6, 5);
+    expect(computePriority(card({ severity: "critical" }), now, now)).toBeCloseTo(80.6, 5);
+    // 20 min of waiting = +2
+    expect(computePriority(card({}), now - 20 * 60 * 1000, now)).toBeCloseTo(12.6, 5);
+  });
+
+  it("adds deadline pressure by proximity", () => {
+    const in30m = new Date(now + 30 * 60 * 1000).toISOString();
+    const in4h = new Date(now + 4 * 60 * 60 * 1000).toISOString();
+    const in12h = new Date(now + 12 * 60 * 60 * 1000).toISOString();
+    const in40h = new Date(now + 40 * 60 * 60 * 1000).toISOString();
+    const base = computePriority(card({}), now, now);
+    expect(computePriority(card({ expiresAt: in30m }), now, now)).toBeCloseTo(base + 50, 5);
+    expect(computePriority(card({ expiresAt: in4h }), now, now)).toBeCloseTo(base + 30, 5);
+    expect(computePriority(card({ expiresAt: in12h }), now, now)).toBeCloseTo(base + 10, 5);
+    expect(computePriority(card({ expiresAt: in40h }), now, now)).toBeCloseTo(base, 5);
+  });
+
+  it("caps the age bonus at +20 and clamps confidence", () => {
+    const old = computePriority(card({}), now - 10 * 60 * 60 * 1000, now);
+    expect(old).toBeCloseTo(10.6 + 20, 5);
+    expect(computePriority(card({ confidence: 0 }), now, now)).toBeCloseTo(20, 5);
+  });
+});
+
+describe("bulk triage envelope (I-201)", () => {
+  it("normalizes each action and defaults its source", () => {
+    const result = validateBulkRequest({
+      actions: [
+        { taskId: "a", nonce: "n1", action: "approve" },
+        { taskId: "b", nonce: "n2", action: "reject", source: "web_ui", data: { reason: "x" } },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.actions).toEqual([
+      { taskId: "a", nonce: "n1", actionName: "approve", source: "bulk" },
+      { taskId: "b", nonce: "n2", actionName: "reject", source: "web_ui", data: { reason: "x" } },
+    ]);
+    expect(validateBulkRequest({ actions: [] }).ok).toBe(false);
+    expect(validateBulkRequest({ actions: [{ nonce: "n", action: "approve" }] }).ok).toBe(false);
+    expect(validateBulkRequest({}).ok).toBe(false);
   });
 });

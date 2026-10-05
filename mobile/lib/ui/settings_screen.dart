@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../config.dart';
 import '../services/task_repository.dart';
+import 'widgets/practice_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -79,6 +80,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 12),
             Text(_status!, style: const TextStyle(fontSize: 12, color: Colors.white54)),
           ],
+          const Divider(height: 40),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.school_outlined),
+            title: const Text('練習モード'),
+            subtitle: const Text('偽のカード5枚でジェスチャーを体験'),
+            onTap: () =>
+                Navigator.of(context).push(PracticeScreen.route()),
+          ),
         ],
       ),
     );

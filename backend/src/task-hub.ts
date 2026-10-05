@@ -1,9 +1,12 @@
 import {
   ActionReply,
+  computePriority,
   decideAction,
   decideUndo,
   expiryDue,
   ExpiryDecision,
+  PROTOCOL_VERSION,
+  SnapshotPayload,
   StoredTask,
   TaskCardPayload,
   UNDO_GRACE_MS,
@@ -15,11 +18,36 @@ import type { Env } from "./env";
 const HEARTBEAT_MS = 15_000;
 /** Processed tasks only serve 409 answers for late duplicates. */
 const PROCESSED_TTL_MS = 60 * 60 * 1000;
+/** replyUrl delivery retry budget and exponential backoff (I-604). */
+const MAX_DELIVERY_ATTEMPTS = 5;
+const DELIVERY_BACKOFF_CAP_MS = 16_000;
+/** Long-poll cap for `GET /api/v1/tasks/{id}/result` (I-901). */
+const MAX_RESULT_WAIT_SEC = 60;
 
 function parseGraceMs(value: string | undefined): number {
   const parsed = value === undefined ? NaN : Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : UNDO_GRACE_MS;
 }
+
+/** HMAC-SHA256 over `ts.body`, hex — the `v1` half of the signature header (I-801). */
+async function hmacHex(secret: string, payload: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload));
+  return [...new Uint8Array(mac)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+type TriageOutcome =
+  | { ok: true; commitAt?: number; snoozedUntil?: number }
+  | { ok: false; error: string };
+
 
 /**
  * Single Durable Object (instance name "global") owning all task state
@@ -47,12 +75,18 @@ export class TaskHub {
         return this.enqueue(request);
       case "/action":
         return this.action(request);
+      case "/bulk":
+        return this.bulk(request);
       case "/undo":
         return this.undo(request);
+      case "/update":
+        return this.update(request);
+      case "/withdraw":
+        return this.withdraw(request);
+      case "/result":
+        return this.result(url);
       case "/state":
-        return json({
-          tasks: (await this.pending()).map((t) => t.task),
-        });
+        return json(await this.snapshot());
       default:
         return json({ error: "not_found" }, 404);
     }
@@ -70,10 +104,7 @@ export class TaskHub {
     this.state.waitUntil(
       (async () => {
         try {
-          const snapshot = await this.pending();
-          await writer.write(
-            encodeSSE("snapshot", { tasks: snapshot.map((t) => t.task) }),
-          );
+          await writer.write(encodeSSE("snapshot", await this.snapshot()));
         } catch {
           this.sessions.delete(id);
         }
@@ -97,31 +128,37 @@ export class TaskHub {
       createdAt: Date.now(),
     };
     await this.state.storage.put(key, stored);
-    await this.broadcast("createTaskCard", task);
+    await this.broadcast("createTaskCard", this.present(stored, Date.now()));
     // A deadline on the new card may be earlier than anything pending.
     await this.rescheduleAlarm();
     return json({ ok: true, taskId: task.taskId }, 201);
   }
 
-  private async action(request: Request): Promise<Response> {
-    const reply = (await request.json()) as ActionReply;
+  /** Single accepted triage, shared by `/action` and `/bulk`. Returns a
+   *  per-item outcome; callers own the HTTP status mapping and the
+   *  (single) alarm reschedule. */
+  private async applyTriage(reply: ActionReply): Promise<TriageOutcome> {
     const key = `task:${reply.taskId}`;
 
     // Input-gated critical section: nothing but storage I/O between the
     // read and the write (docs/architecture.md).
     const stored = await this.state.storage.get<StoredTask>(key);
     const decision = decideAction(stored, reply);
-    if (decision.kind === "not_found") {
-      return json({ error: "task_not_found", taskId: reply.taskId }, 404);
-    }
-    if (decision.kind === "bad_nonce") {
-      return json({ error: "bad_nonce", taskId: reply.taskId }, 409);
-    }
-    if (decision.kind === "conflict") {
-      return json({ error: decision.reason, taskId: reply.taskId }, 409);
-    }
-    if (!stored) {
-      return json({ error: "task_not_found", taskId: reply.taskId }, 404);
+    if (decision.kind === "not_found") return { ok: false, error: "task_not_found" };
+    if (decision.kind === "bad_nonce") return { ok: false, error: "bad_nonce" };
+    if (decision.kind === "conflict") return { ok: false, error: decision.reason };
+    if (!stored) return { ok: false, error: "task_not_found" };
+
+    if (decision.kind === "snooze") {
+      const until = Date.parse(reply.until ?? "");
+      if (!Number.isFinite(until)) return { ok: false, error: "invalid_until" };
+      await this.state.storage.put(key, { ...stored, snoozedUntil: until });
+      await this.broadcast("dismissTask", {
+        taskId: reply.taskId,
+        by: "snooze",
+        snoozedUntil: new Date(until).toISOString(),
+      });
+      return { ok: true, snoozedUntil: until };
     }
 
     // Undo grace (I-104): the card is dismissed on every device now, but
@@ -134,18 +171,64 @@ export class TaskHub {
       pendingReply: reply,
     };
     await this.state.storage.put(key, updated);
-
     await this.broadcast("dismissTask", {
       taskId: reply.taskId,
       by: reply.source,
     });
+    return { ok: true, commitAt };
+  }
+
+  private async action(request: Request): Promise<Response> {
+    const reply = (await request.json()) as ActionReply;
+    const outcome = await this.applyTriage(reply);
+    if (!outcome.ok) {
+      const status = outcome.error === "task_not_found"
+        ? 404
+        : outcome.error === "invalid_until"
+          ? 400
+          : 409;
+      return json({ error: outcome.error, taskId: reply.taskId }, status);
+    }
     await this.rescheduleAlarm();
     return json({
       ok: true,
       taskId: reply.taskId,
-      actionName: reply.actionName,
-      commitAt,
+      ...(outcome.commitAt !== undefined ? { commitAt: outcome.commitAt } : {}),
+      ...(outcome.snoozedUntil !== undefined
+        ? { snoozedUntil: new Date(outcome.snoozedUntil).toISOString() }
+        : {}),
     });
+  }
+
+  /** Bulk triage (I-201): each item CASes independently. */
+  private async bulk(request: Request): Promise<Response> {
+    const { actions } = (await request.json()) as {
+      actions: Array<{
+        taskId: string;
+        nonce: string;
+        actionName: string;
+        source: string;
+        data?: Record<string, unknown>;
+      }>;
+    };
+    const results: Array<Record<string, unknown>> = [];
+    for (const item of actions) {
+      const outcome = await this.applyTriage({
+        taskId: item.taskId,
+        nonce: item.nonce,
+        actionName: item.actionName,
+        timestamp: new Date().toISOString(),
+        source: item.source,
+        ...(item.data ? { data: item.data } : {}),
+      });
+      results.push(
+        outcome.ok
+          ? { taskId: item.taskId, ok: true, ...(outcome.commitAt !== undefined ? { commitAt: outcome.commitAt } : {}) }
+          : { taskId: item.taskId, error: outcome.error },
+      );
+    }
+    await this.rescheduleAlarm();
+    return json({ results });
   }
 
   private async undo(request: Request): Promise<Response> {
@@ -183,39 +266,275 @@ export class TaskHub {
     };
     await this.state.storage.put(key, updated);
 
-    await this.broadcast("createTaskCard", task);
+    await this.broadcast("createTaskCard", this.present(updated, Date.now()));
     await this.rescheduleAlarm();
     return json({ ok: true, taskId: req.taskId, nonce: task.nonce });
   }
 
-  private async deliverToAgent(
-    replyUrl: string,
+  /**
+   * Agent-side card update (I-204): a full replacement card, a rotated
+   * nonce and a `revised: true` re-broadcast. Only a still-pending card
+   * can be updated; an update re-surfaces a snoozed card.
+   */
+  private async update(request: Request): Promise<Response> {
+    const task = (await request.json()) as TaskCardPayload;
+    const key = `task:${task.taskId}`;
+    const stored = await this.state.storage.get<StoredTask>(key);
+    if (!stored) {
+      return json({ error: "task_not_found", taskId: task.taskId }, 404);
+    }
+    if (stored.status !== "pending") {
+      return json({ error: "already_processed", taskId: task.taskId }, 409);
+    }
+
+    const nonce = `tok_${crypto.randomUUID()}`;
+    const next: TaskCardPayload = {
+      ...task,
+      taskId: task.taskId,
+      nonce,
+      protocolVersion: task.protocolVersion ?? PROTOCOL_VERSION,
+    };
+    const updated: StoredTask = {
+      ...stored,
+      task: next,
+      nonce,
+      snoozedUntil: undefined,
+      // The replacement carries a fresh payload, so a previous
+      // escalate-deadline consumption no longer applies.
+      escalatedAt: undefined,
+    };
+    await this.state.storage.put(key, updated);
+
+    await this.broadcast("createTaskCard", {
+      ...this.present(updated, Date.now()),
+      revised: true,
+    });
+    await this.rescheduleAlarm();
+    return json({ ok: true, taskId: task.taskId, nonce });
+  }
+
+  /**
+   * Agent-side withdraw (I-205): the decision is no longer needed, so
+   * the card leaves every device and finishes as `processed`.
+   */
+  private async withdraw(request: Request): Promise<Response> {
+    const { taskId } = (await request.json()) as { taskId: string };
+    const key = `task:${taskId}`;
+    const stored = await this.state.storage.get<StoredTask>(key);
+    if (!stored) return json({ error: "task_not_found", taskId }, 404);
+    if (stored.status !== "pending") {
+      return json({ error: "already_processed", taskId }, 409);
+    }
+
+    const now = Date.now();
+    const updated: StoredTask = {
+      ...stored,
+      status: "processed",
+      processedAt: now,
+      processedBy: "withdrawn",
+      outcome: {
+        name: "withdraw",
+        source: "withdrawn",
+        at: new Date(now).toISOString(),
+      },
+    };
+    await this.state.storage.put(key, updated);
+    // `withdrawTask` is the canonical event; `dismissTask` with
+    // by:"withdraw" lets clients that only handle dismissTask remove the
+    // card too (both are idempotent by taskId).
+    await this.broadcast("withdrawTask", { taskId });
+    await this.broadcast("dismissTask", { taskId, by: "withdraw" });
+    await this.rescheduleAlarm();
+    return json({ ok: true, taskId });
+  }
+
+  /**
+   * Agent SDK long-poll (I-901): resolves as soon as the task reaches a
+   * terminal state, or after `wait` seconds (max 60), whichever first.
+   */
+  private async result(url: URL): Promise<Response> {
+    const taskId = url.searchParams.get("taskId") ?? "";
+    const requested = Number(url.searchParams.get("wait") ?? "0");
+    const waitSec = Number.isFinite(requested)
+      ? Math.min(MAX_RESULT_WAIT_SEC, Math.max(0, requested))
+      : 0;
+    const key = `task:${taskId}`;
+    const deadline = Date.now() + waitSec * 1000;
+
+    for (;;) {
+      const stored = await this.state.storage.get<StoredTask>(key);
+      if (!stored) return json({ error: "task_not_found", taskId }, 404);
+      const now = Date.now();
+      if (stored.status === "processed" || now >= deadline) {
+        return json(this.resultBody(taskId, stored));
+      }
+      await sleep(Math.max(50, Math.min(500, deadline - now)));
+    }
+  }
+
+  private resultBody(taskId: string, stored: StoredTask): Record<string, unknown> {
+    const action = stored.outcome ??
+      (stored.pendingReply
+        ? {
+            name: stored.pendingReply.actionName,
+            ...(stored.pendingReply.data ? { data: stored.pendingReply.data } : {}),
+            source: stored.pendingReply.source,
+            at: stored.pendingReply.timestamp,
+          }
+        : undefined);
+    return {
+      taskId,
+      status: stored.status,
+      protocolVersion: PROTOCOL_VERSION,
+      ...(action ? { action } : {}),
+      ...(stored.delivery
+        ? {
+            delivery: {
+              attempts: stored.delivery.attempts,
+              ...(stored.delivery.lastError !== undefined
+                ? { lastError: stored.delivery.lastError }
+                : {}),
+              ...(stored.delivery.failed ? { failed: true } : {}),
+            },
+          }
+        : {}),
+    };
+  }
+
+  /** Card as broadcast: the stored payload plus the current (age-aware)
+   *  `priority` score. */
+  private present(stored: StoredTask, now: number): TaskCardPayload {
+    return {
+      ...stored.task,
+      priority: computePriority(stored.task, stored.createdAt, now),
+    };
+  }
+
+  /** Snapshot envelope (SSE `snapshot` + `GET /state`). */
+  private async snapshot(): Promise<SnapshotPayload> {
+    const now = Date.now();
+    const all = await this.state.storage.list<StoredTask>({ prefix: "task:" });
+    const tasks = this.orderedPending([...all.values()], now);
+    const snoozed: SnapshotPayload["snoozed"] = [];
+    const delivery: SnapshotPayload["delivery"] = [];
+    for (const stored of all.values()) {
+      if (
+        stored.status === "pending" &&
+        stored.snoozedUntil !== undefined &&
+        stored.snoozedUntil > now
+      ) {
+        snoozed.push({
+          taskId: stored.task.taskId,
+          until: new Date(stored.snoozedUntil).toISOString(),
+        });
+      }
+      if (stored.delivery?.failed) {
+        delivery.push({
+          taskId: stored.task.taskId,
+          ...(stored.delivery.lastError !== undefined
+            ? { lastError: stored.delivery.lastError }
+            : {}),
+          attempts: stored.delivery.attempts,
+        });
+      }
+    }
+    return {
+      protocolVersion: PROTOCOL_VERSION,
+      tasks: tasks.map((t) => this.present(t, now)),
+      snoozed,
+      delivery,
+    };
+  }
+
+  /** Pending, non-snoozed tasks ordered priority desc, createdAt asc (I-206). */
+  private orderedPending(all: StoredTask[], now: number): StoredTask[] {
+    return all
+      .filter(
+        (t) =>
+          t.status === "pending" &&
+          !(t.snoozedUntil !== undefined && t.snoozedUntil > now),
+      )
+      .sort((a, b) => {
+        const diff =
+          computePriority(b.task, b.createdAt, now) -
+          computePriority(a.task, a.createdAt, now);
+        return diff !== 0 ? diff : a.createdAt - b.createdAt;
+      });
+  }
+
+  /** POST the reply to `replyUrl` with an HMAC signature (I-604/I-801).
+   *  Failures schedule the next backoff attempt; the fifth gives up and
+   *  is surfaced via `deliveryFailed` + `/state`. */
+  private async attemptDelivery(
+    key: string,
+    url: string,
     reply: ActionReply,
   ): Promise<void> {
+    const stored = await this.state.storage.get<StoredTask>(key);
+    if (!stored || stored.delivery?.failed) return;
+
+    const attempts = (stored.delivery?.attempts ?? 0) + 1;
+    const body = JSON.stringify(reply);
+    let lastError: string | undefined;
+    let ok = false;
     try {
-      const res = await fetch(replyUrl, {
+      const secret = this.env.REPLY_SIGNING_SECRET ?? this.env.AGENT_TOKEN;
+      const headers: Record<string, string> = {
+        "content-type": "application/json",
+      };
+      if (secret) {
+        const ts = Math.floor(Date.now() / 1000);
+        headers["X-AgentDesk-Signature"] =
+          `t=${ts},v1=${await hmacHex(secret, `${ts}.${body}`)}`;
+        headers["X-AgentDesk-Event"] =
+          reply.actionName === "expire" ? "expire" : "triage_reply";
+      }
+      const res = await fetch(url, {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(reply),
+        headers,
+        body,
         signal: AbortSignal.timeout(10_000),
       });
-      if (!res.ok) {
-        console.error(`agent callback ${replyUrl} responded ${res.status}`);
-      }
+      if (res.ok) ok = true;
+      else lastError = `HTTP ${res.status}`;
     } catch (err) {
-      console.error(`agent callback ${replyUrl} failed:`, err);
+      lastError = err instanceof Error ? err.message : String(err);
     }
+
+    const now = Date.now();
+    if (ok) {
+      const done: StoredTask = { ...stored };
+      delete done.delivery;
+      await this.state.storage.put(key, done);
+    } else if (attempts >= MAX_DELIVERY_ATTEMPTS) {
+      const failed: StoredTask = {
+        ...stored,
+        delivery: { attempts, url, reply, lastError, failed: true },
+      };
+      await this.state.storage.put(key, failed);
+      await this.broadcast("deliveryFailed", {
+        taskId: stored.task.taskId,
+        lastError,
+      });
+    } else {
+      const retry: StoredTask = {
+        ...stored,
+        delivery: {
+          attempts,
+          url,
+          reply,
+          lastError,
+          // 1s → 2s → 4s → 8s, capped at 16s.
+          nextRetryAt: now + Math.min(DELIVERY_BACKOFF_CAP_MS, 1000 * 2 ** (attempts - 1)),
+        },
+      };
+      await this.state.storage.put(key, retry);
+    }
+    await this.rescheduleAlarm();
   }
 
   private get graceMs(): number {
     return parseGraceMs(this.env.UNDO_GRACE_MS);
-  }
-
-  private async pending(): Promise<StoredTask[]> {
-    const all = await this.state.storage.list<StoredTask>({ prefix: "task:" });
-    return [...all.values()]
-      .filter((t) => t.status === "pending")
-      .sort((a, b) => a.createdAt - b.createdAt);
   }
 
   private async broadcast(event: string, data: unknown): Promise<void> {
@@ -260,9 +579,10 @@ export class TaskHub {
   }
 
   /**
-   * One alarm serves three jobs (I-104, I-203): commit deadlines for
-   * `committing` tasks, expiry deadlines for pending cards with
-   * `expiresAt`, and TTL cleanup for `processed` ones. Call after every
+   * One alarm serves four jobs (I-104, I-203, snooze, I-604): commit
+   * deadlines for `committing` tasks, resize deadlines for snoozed cards,
+   * expiry deadlines for pending cards with `expiresAt`, reply-retry
+   * backoff, and TTL cleanup for `processed` ones. Call after every
    * status change; it recomputes the next deadline from scratch so
    * early-finishing work never strands a later alarm.
    */
@@ -270,20 +590,28 @@ export class TaskHub {
     const now = Date.now();
     let next: number | null = null;
     const all = await this.state.storage.list<StoredTask>({ prefix: "task:" });
+    const candidates: number[] = [];
     for (const stored of all.values()) {
-      const at =
-        stored.status === "committing"
-          ? (stored.commitAt ?? now)
-          : stored.status === "processed"
-            ? (stored.processedAt ?? now) + PROCESSED_TTL_MS
-            : stored.status === "pending" &&
-                stored.task.expiresAt !== undefined &&
-                stored.escalatedAt === undefined
-              ? Date.parse(stored.task.expiresAt) || null
-              : null;
-      if (at !== null && Number.isFinite(at) && (next === null || at < next)) {
-        next = at;
+      if (stored.status === "committing") {
+        candidates.push(stored.commitAt ?? now);
+      } else if (stored.status === "processed") {
+        candidates.push((stored.processedAt ?? now) + PROCESSED_TTL_MS);
+      } else if (stored.status === "pending") {
+        const resumeAt =
+          stored.snoozedUntil !== undefined
+            ? stored.snoozedUntil
+            : stored.task.expiresAt !== undefined && stored.escalatedAt === undefined
+              ? Date.parse(stored.task.expiresAt)
+              : NaN;
+        if (Number.isFinite(resumeAt)) candidates.push(resumeAt);
       }
+      const retryAt = stored.delivery?.nextRetryAt;
+      if (!stored.delivery?.failed && retryAt !== undefined) {
+        candidates.push(retryAt);
+      }
+    }
+    for (const at of candidates) {
+      if (Number.isFinite(at) && (next === null || at < next)) next = at;
     }
     const current = await this.state.storage.getAlarm();
     if (next === null) {
@@ -300,33 +628,75 @@ export class TaskHub {
     const ttlCutoff = now - PROCESSED_TTL_MS;
     const all = await this.state.storage.list<StoredTask>({ prefix: "task:" });
     const doomed: string[] = [];
-    const delivered: Array<{ key: string; reply: ActionReply; url: string }> =
-      [];
+    const deliveries: Array<{ key: string; reply: ActionReply; url: string }> = [];
     for (const [key, stored] of all) {
       if (stored.status === "committing" && (stored.commitAt ?? 0) <= now) {
+        const reply = stored.pendingReply;
         const updated: StoredTask = {
           ...stored,
           status: "processed",
           processedAt: stored.commitAt ?? now,
-          processedBy: stored.pendingReply?.source,
+          processedBy: reply?.source,
           commitAt: undefined,
           pendingReply: undefined,
+          ...(reply
+            ? {
+                outcome: {
+                  name: reply.actionName,
+                  ...(reply.data ? { data: reply.data } : {}),
+                  source: reply.source,
+                  at: reply.timestamp,
+                },
+              }
+            : {}),
         };
         await this.state.storage.put(key, updated);
-        const reply = stored.pendingReply;
         if (reply && stored.task.replyUrl) {
-          delivered.push({ key, reply, url: stored.task.replyUrl });
+          deliveries.push({ key, reply, url: stored.task.replyUrl });
         }
       } else if (stored.status === "pending") {
-        const decision = expiryDue(stored, now);
-        if (decision) await this.runExpiry(key, stored, decision, now);
+        if (stored.snoozedUntil !== undefined) {
+          // Snoozed cards are exempt from expiry until they resurface.
+          if (stored.snoozedUntil <= now) {
+            const task: TaskCardPayload = {
+              ...stored.task,
+              nonce: `tok_${crypto.randomUUID()}`,
+            };
+            const updated: StoredTask = {
+              ...stored,
+              task,
+              nonce: task.nonce,
+              snoozedUntil: undefined,
+            };
+            await this.state.storage.put(key, updated);
+            await this.broadcast("createTaskCard", this.present(updated, now));
+          }
+        } else {
+          const decision = expiryDue(stored, now);
+          if (decision) await this.runExpiry(key, stored, decision, now);
+        }
       } else if (stored.status === "processed") {
-        if ((stored.processedAt ?? 0) < ttlCutoff) doomed.push(key);
+        const delivery = stored.delivery;
+        if (
+          delivery &&
+          !delivery.failed &&
+          delivery.nextRetryAt !== undefined &&
+          delivery.nextRetryAt <= now &&
+          delivery.url &&
+          delivery.reply
+        ) {
+          deliveries.push({ key, reply: delivery.reply, url: delivery.url });
+        } else if (
+          (stored.processedAt ?? 0) < ttlCutoff &&
+          !(delivery && !delivery.failed)
+        ) {
+          doomed.push(key);
+        }
       }
     }
     if (doomed.length > 0) await this.state.storage.delete(doomed);
-    for (const { reply, url } of delivered) {
-      this.state.waitUntil(this.deliverToAgent(url, reply));
+    for (const { key, reply, url } of deliveries) {
+      this.state.waitUntil(this.attemptDelivery(key, url, reply));
     }
     await this.rescheduleAlarm();
   }
@@ -360,7 +730,7 @@ export class TaskHub {
         escalatedAt: now,
       };
       await this.state.storage.put(key, updated);
-      await this.broadcast("createTaskCard", task);
+      await this.broadcast("createTaskCard", this.present(updated, now));
       return;
     }
 
@@ -389,6 +759,12 @@ export class TaskHub {
       status: "processed",
       processedAt: now,
       processedBy: "on_expire",
+      outcome: {
+        name: reply.actionName,
+        ...(reply.data ? { data: reply.data } : {}),
+        source: reply.source,
+        at: reply.timestamp,
+      },
     };
     await this.state.storage.put(key, updated);
     await this.broadcast("dismissTask", {
@@ -396,7 +772,9 @@ export class TaskHub {
       by: "on_expire",
     });
     if (stored.task.replyUrl) {
-      this.state.waitUntil(this.deliverToAgent(stored.task.replyUrl, reply));
+      this.state.waitUntil(
+        this.attemptDelivery(key, stored.task.replyUrl, reply),
+      );
     }
   }
 }
