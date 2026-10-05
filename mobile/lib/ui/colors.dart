@@ -21,7 +21,7 @@ abstract final class PopColors {
 
   // Ink on colored cards.
   static const Color ink = Color(0xFF1B1E16);
-  static const Color inkSoft = Color(0xB81B1E16);
+  static const Color inkSoft = Color(0xC61B1E16);
   static const Color pill = Color(0xEDFFFFFF);
   static const Color pillInk = Color(0xFF22251D);
   static const Color darkPill = Color(0xEB14170F);
@@ -47,10 +47,10 @@ abstract final class PopColors {
         _ => (infoTop, infoBottom),
       };
 
-  /// Ambient glow behind the card, tinted by severity.
-  static Color severityGlow(String severity) => switch (severity) {
-        'critical' => const Color(0x5CE94A3D),
-        'warning' => const Color(0x52EFBA2F),
-        _ => const Color(0x57C6DF5F),
+  /// Flat severity card surface (color-pop, no gradient).
+  static Color severitySolid(String severity) => switch (severity) {
+        'critical' => criticalTop,
+        'warning' => warningTop,
+        _ => infoTop,
       };
 }

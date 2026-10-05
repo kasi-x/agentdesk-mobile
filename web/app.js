@@ -414,6 +414,94 @@ function orderedComponents(task) {
   return list.filter((c) => c && c.component !== 'TriageCard');
 }
 
+/* ---------------- value-aware diff rendering ----------------
+ * 「2026-10-05 14:00 → 16:30」はカレンダーの変更に、「$120 → $80」は
+ * 金額の変更に見えるように。パースできる値だけ意味づけし、それ以外は
+ * 従来のテキスト差分にフォールバックする(どちらも純粋なテキスト描画)。 */
+const WEEKDAYS_JA = '日月火水木金土';
+
+function parseValue(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return null;
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (m) {
+    const d = new Date(+m[1], +m[2] - 1, +m[3]);
+    return {
+      kind: 'datetime',
+      dateKey: `${m[1]}-${m[2]}-${m[3]}`,
+      date: `${+m[2]}月${+m[3]}日(${WEEKDAYS_JA[d.getDay()]})`,
+      time: `${String(+m[4]).padStart(2, '0')}:${m[5]}`,
+    };
+  }
+  m = s.match(/^(\d{1,2}):(\d{2})$/);
+  if (m) return { kind: 'time', time: `${String(+m[1]).padStart(2, '0')}:${m[2]}` };
+  m = s.match(/^([^0-9\s]+)\s*([\d,]+(?:\.\d+)?)$/);
+  if (m && /^(?:[$¥€£]|usd|jpy|eur)/i.test(m[1])) {
+    return { kind: 'money', symbol: m[1], amount: parseFloat(m[2].replace(/,/g, '')) };
+  }
+  return null;
+}
+
+function minutesOf(time) {
+  const [h, m] = time.split(':').map(Number);
+  return h * 60 + m;
+}
+
+function deltaLabel(bv, av) {
+  if (bv.kind === 'datetime' && av.kind === 'datetime' && bv.dateKey === av.dateKey) {
+    const diff = minutesOf(av.time) - minutesOf(bv.time);
+    const sign = diff >= 0 ? '+' : '−';
+    const abs = Math.abs(diff);
+    const h = Math.floor(abs / 60);
+    const mm = abs % 60;
+    return sign + (h ? `${h}時間${mm ? `${mm}分` : ''}` : `${mm}分`);
+  }
+  if (bv.kind === 'money' && av.kind === 'money' && bv.symbol === av.symbol) {
+    const diff = av.amount - bv.amount;
+    const sign = diff >= 0 ? '+' : '−';
+    return `${sign}${bv.symbol}${Math.abs(diff).toLocaleString('en-US')}`;
+  }
+  return null;
+}
+
+function diffIcon(name, cls) {
+  return el('span', `dvv-ic dvv-ic-${name} ${cls || ''}`);
+}
+
+function valueChip(v, isBefore) {
+  const chip = el('span', `dvv-chip ${isBefore ? 'before' : 'after'}`);
+  if (v.kind !== 'money') chip.appendChild(diffIcon('clock'));
+  chip.appendChild(el('span', 'dvv-chip-text',
+    v.kind === 'money' ? `${v.symbol}${v.amount.toLocaleString('en-US')}` : v.time));
+  return chip;
+}
+
+function renderValuePair(parent, label, beforeRaw, afterRaw) {
+  const row = el('div', 'diffbox-row');
+  if (label) row.appendChild(el('div', 'diffbox-rowlabel', label));
+  const bv = parseValue(beforeRaw);
+  const av = parseValue(afterRaw);
+  if (bv && av && bv.kind === av.kind) {
+    if (bv.kind === 'datetime') {
+      const dateRow = el('div', 'dvv-date');
+      dateRow.appendChild(diffIcon('calendar'));
+      dateRow.appendChild(el('span', 'dvv-date-text', bv.date));
+      row.appendChild(dateRow);
+    }
+    const chips = el('div', 'dvv-chips');
+    chips.appendChild(valueChip(bv, true));
+    chips.appendChild(diffIcon('arrow-right', 'dvv-arrow'));
+    chips.appendChild(valueChip(av, false));
+    const delta = deltaLabel(bv, av);
+    if (delta) chips.appendChild(el('span', 'dvv-delta', delta));
+    row.appendChild(chips);
+  } else {
+    row.appendChild(el('div', 'diff-before', beforeRaw || ''));
+    row.appendChild(el('div', 'diff-after', `→ ${afterRaw || ''}`));
+  }
+  parent.appendChild(row);
+}
+
 function renderComponent(comp, task) {
   const box = el('div', 'comp');
   switch (comp.component) {
@@ -430,19 +518,14 @@ function renderComponent(comp, task) {
       const wrap = el('div', 'diffbox');
       const hl = p.highlight === 'warning' ? 'warning' : p.highlight === 'critical' ? 'critical' : 'info';
       wrap.appendChild(el('div', `diffbox-highlight ${hl}`));
-      const addPair = (parent, label, before, after) => {
-        const row = el('div', 'diffbox-row');
-        if (label) row.appendChild(el('div', 'diffbox-title', label));
-        else if (p.title && parent === wrap) row.appendChild(el('div', 'diffbox-title', p.title));
-        row.appendChild(el('div', 'diff-before', before || ''));
-        row.appendChild(el('div', 'diff-after', `→ ${after || ''}`));
-        parent.appendChild(row);
-      };
-      addPair(wrap, null, p.before, p.after);
+      if (p.title && typeof p.title === 'string') {
+        wrap.appendChild(el('div', 'diffbox-title', p.title));
+      }
+      renderValuePair(wrap, null, p.before, p.after);
       if (Array.isArray(p.rows)) {
         for (const r of p.rows) {
           if (!r || typeof r !== 'object') continue;
-          addPair(wrap, r.label || null, r.before, r.after);
+          renderValuePair(wrap, r.label || null, r.before, r.after);
         }
       }
       if (typeof p.inline === 'string' && p.inline) {

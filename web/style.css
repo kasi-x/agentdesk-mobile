@@ -19,25 +19,22 @@
   --muted: #a8ad9f;
   --faint: #77806b;
   --ink: #1b1e16;           /* text on colored cards */
-  --ink-soft: rgba(27, 30, 22, 0.72);
+  --ink-soft: rgba(27, 30, 22, 0.78);
   --pill: rgba(255, 255, 255, 0.93);   /* white pills on colored cards */
   --pill-ink: #22251d;
   --dark-pill: rgba(20, 22, 16, 0.92); /* dark pills on colored cards */
   --accent: #f5c842;        /* amber CTA (count pill, brand glyph) */
-  --sev-info-1: #d6ec86;
-  --sev-info-2: #c2df5f;
-  --sev-warning-1: #f7d452;
-  --sev-warning-2: #efba2f;
-  --sev-critical-1: #f4695c;
-  --sev-critical-2: #e94a3d;
+  --sev-info: #cfe56b;
+  --sev-warning: #f6c73f;
+  --sev-critical: #f2604c;
   --lime: #c9e26b;
   --coral: #ff8d7e;
   --green: #3ddc84;
   --red: #ff6b6b;
   --yellow: #f5c451;
   --shadow-card:
-    0 14px 32px rgba(0, 0, 0, 0.42),
-    0 3px 10px rgba(0, 0, 0, 0.28);
+    0 20px 44px -14px rgba(0, 0, 0, 0.5),
+    0 4px 12px rgba(0, 0, 0, 0.3);
   --shadow-sheet: 0 -16px 48px rgba(0, 0, 0, 0.55);
   --radius-card: 24px;
   /* Animate UI spring (framer stiffness 200 / damping 20), sampled */
@@ -438,24 +435,17 @@ body {
 .card {
   width: 100%;
   max-width: 540px;
-  background: linear-gradient(170deg, var(--card-bg1, #2b2e27), var(--card-bg2, var(--chrome)));
+  background: var(--card-bg, var(--chrome));
   border-radius: var(--radius-card);
   overflow: hidden;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.32),
-    0 24px 60px -18px var(--card-glow, rgba(0, 0, 0, 0.5)),
-    var(--shadow-card);
+  box-shadow: var(--shadow-card);
   animation: card-in 0.62s var(--spring) backwards;
-  transition: transform 0.22s var(--spring), box-shadow 0.22s ease;
+  transition: transform 0.22s var(--spring);
 }
 
 @media (hover: hover) and (min-width: 768px) {
   .card:hover {
     transform: translateY(-2px);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.32),
-      0 30px 70px -18px var(--card-glow, rgba(0, 0, 0, 0.55)),
-      var(--shadow-card);
   }
 }
 
@@ -474,23 +464,17 @@ body {
 .card-inner > *:nth-child(n + 8) { animation-delay: 0.34s; }
 
 .card.sev-info {
-  --card-bg1: var(--sev-info-1);
-  --card-bg2: var(--sev-info-2);
-  --card-glow: rgba(198, 223, 95, 0.34);
+  --card-bg: var(--sev-info);
   color: var(--ink);
 }
 
 .card.sev-warning {
-  --card-bg1: var(--sev-warning-1);
-  --card-bg2: var(--sev-warning-2);
-  --card-glow: rgba(239, 186, 47, 0.32);
+  --card-bg: var(--sev-warning);
   color: var(--ink);
 }
 
 .card.sev-critical {
-  --card-bg1: var(--sev-critical-1);
-  --card-bg2: var(--sev-critical-2);
-  --card-glow: rgba(233, 74, 61, 0.36);
+  --card-bg: var(--sev-critical);
   color: var(--ink);
 }
 
@@ -599,19 +583,27 @@ body {
   font-size: 10px;
   font-weight: 800;
   border-radius: 999px;
-  padding: 3px 10px;
+  padding: 4px 10px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  background: var(--dark-pill);
-  color: rgba(255, 255, 255, 0.95);
+  background: var(--pill);
+  color: var(--ink);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
-.badge.info,
-.badge.warning,
-.badge.critical {
-  background: var(--dark-pill);
-  color: rgba(255, 255, 255, 0.95);
+.badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dot, var(--ink));
 }
+
+.badge.info { --dot: #5b8def; }
+.badge.warning { --dot: #e08c00; }
+.badge.critical { --dot: #d0342c; }
 
 /* ---------- impact row (I-202) ---------- */
 .impact-row {
@@ -701,10 +693,10 @@ body {
 }
 
 .summary {
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 800;
   line-height: 1.4;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.015em;
   color: var(--ink);
   margin: -2px 0 0;
 }
@@ -780,10 +772,99 @@ body {
 .diffbox-row {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 7px;
   padding: 11px 13px;
   font-size: 13px;
   line-height: 1.5;
+}
+
+.diffbox-rowlabel {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #565b4d;
+}
+
+/* value-aware diff (web/app.js parseValue): calendar rows, time / money
+ * chips, delta pill — so the content reads as what it IS. */
+.dvv-date {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.dvv-ic {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  background-color: currentColor;
+}
+
+.dvv-ic-calendar {
+  -webkit-mask: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 2v4'/%3E%3Cpath d='M16 2v4'/%3E%3Crect width='18' height='18' x='3' y='4' rx='2'/%3E%3Cpath d='M3 10h18'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 2v4'/%3E%3Cpath d='M16 2v4'/%3E%3Crect width='18' height='18' x='3' y='4' rx='2'/%3E%3Cpath d='M3 10h18'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.dvv-ic-clock {
+  -webkit-mask: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpolyline points='12 6 12 12 16 14'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpolyline points='12 6 12 12 16 14'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.dvv-arrow {
+  color: #6b6f60;
+  -webkit-mask-image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12h14'/%3E%3Cpath d='m12 5 7 7-7 7'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12h14'/%3E%3Cpath d='m12 5 7 7-7 7'/%3E%3C/svg%3E");
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+.dvv-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dvv-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.dvv-chip.before {
+  background: rgba(27, 30, 22, 0.08);
+  color: var(--ink-soft);
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+}
+
+.dvv-chip.after {
+  background: var(--ink);
+  color: #fff;
+  font-weight: 700;
+}
+
+.dvv-delta {
+  font-size: 12px;
+  font-weight: 800;
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: rgba(27, 30, 22, 0.1);
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
 }
 
 .diff-before {
