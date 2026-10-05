@@ -91,7 +91,7 @@
         createdAt: ago(11),
         impact: { summary: 'Stripe で $120.00 を返金します', reversible: false, cost: { amount: 120, currency: 'USD' }, scope: 'UserA の請求 1 件' },
         components: [
-          { id: 'diff', component: 'DiffBox', properties: { title: 'Stripe返金', before: '$120.00 請求済み', after: '$120.00 返金 → 対象: UserA', highlight: 'critical', inline: '- charge_8Kx2  $120.00\n+ refund_8Kx2  $120.00\n  status: pending' } },
+          { id: 'diff', component: 'DiffBox', properties: { title: 'Stripe返金', before: '$120.00 請求済み', after: '$120.00 返金 → 対象: UserA', highlight: 'critical', rows: [ { label: '返金額', before: '$120.00', after: '$80.00' } ], inline: '- charge_8Kx2  $120.00\n+ refund_8Kx2  $120.00\n  status: pending' } },
           { id: 'quote', component: 'Text', properties: { text: '（外部メール引用）商品が届かないため全額返金を要求します。至急対応してください。', source: 'external' } },
         ],
         actions: {

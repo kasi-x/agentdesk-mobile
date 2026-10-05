@@ -28,27 +28,15 @@ class TaskCardView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (cardTop, cardBottom) = PopColors.severityCard(task.severity);
-    final cardGlow = PopColors.severityGlow(task.severity);
+    final cardColor = PopColors.severitySolid(task.severity);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
       child: Container(
         decoration: BoxDecoration(
-          // The card surface itself carries severity (color-pop).
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [cardTop, cardBottom],
-          ),
+          // The card surface itself carries severity (color-pop, flat).
+          color: cardColor,
           borderRadius: BorderRadius.circular(24),
           boxShadow: [
-            // severity-tinted ambient glow (Animate UI style depth)
-            BoxShadow(
-              color: cardGlow,
-              blurRadius: 48,
-              offset: const Offset(0, 14),
-              spreadRadius: -8,
-            ),
             BoxShadow(
               color: Colors.black.withValues(alpha: 0.42),
               blurRadius: 24,
@@ -265,25 +253,36 @@ class TaskCardView extends StatelessWidget {
   }
 
   Widget _severityBadge() {
-    final String label = switch (task.severity) {
-      'critical' => 'CRITICAL',
-      'warning' => 'WARNING',
-      _ => 'INFO',
+    final (String label, Color dot) = switch (task.severity) {
+      'critical' => const ('CRITICAL', Color(0xFFD0342C)),
+      'warning' => const ('WARNING', Color(0xFFE08C00)),
+      _ => const ('INFO', Color(0xFF5B8DEF)),
     };
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: PopColors.darkPill,
+        color: PopColors.pill,
         borderRadius: BorderRadius.circular(999),
       ),
-      child: Text(
-        label,
-        style: const TextStyle(
-          fontSize: 9,
-          fontWeight: FontWeight.w800,
-          color: Colors.white,
-          letterSpacing: 0.8,
-        ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(color: dot, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.w800,
+              color: PopColors.ink,
+              letterSpacing: 0.8,
+            ),
+          ),
+        ],
       ),
     );
   }

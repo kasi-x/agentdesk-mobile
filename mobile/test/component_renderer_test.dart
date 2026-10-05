@@ -7,7 +7,8 @@ Widget _wrap(Widget child) =>
     MaterialApp(home: Scaffold(body: SingleChildScrollView(child: child)));
 
 void main() {
-  testWidgets('renders DiffBox before/after (spec §3.2)', (tester) async {
+  testWidgets('renders DiffBox time chips (value-aware, spec §3.2)',
+      (tester) async {
     await tester.pumpWidget(_wrap(
       const ComponentRenderer(
         component: CardComponent(
@@ -19,11 +20,13 @@ void main() {
     ));
     expect(find.text('14:00'), findsOneWidget);
     expect(find.text('16:30'), findsOneWidget);
-    expect(find.text('BEFORE'), findsOneWidget);
-    expect(find.text('AFTER'), findsOneWidget);
+    // clock chips instead of BEFORE/AFTER labels (value-aware diff)
+    expect(find.byIcon(Icons.access_time), findsNWidgets(2));
+    expect(find.text('BEFORE'), findsNothing);
   });
 
-  testWidgets('DiffBox renders rows and inline unified diff', (tester) async {
+  testWidgets('DiffBox renders datetime calendar row, rows and inline diff',
+      (tester) async {
     await tester.pumpWidget(_wrap(
       const ComponentRenderer(
         component: CardComponent(
@@ -31,8 +34,8 @@ void main() {
           component: 'DiffBox',
           properties: {
             'title': '金額',
-            'before': '120',
-            'after': '240',
+            'before': '2026-10-05 14:00',
+            'after': '2026-10-05 16:30',
             'rows': [
               {'label': '対象', 'before': 'UserA', 'after': 'UserB'},
             ],
@@ -41,11 +44,12 @@ void main() {
         ),
       ),
     ));
-    expect(find.text('120'), findsOneWidget);
-    expect(find.text('240'), findsOneWidget);
+    expect(find.byIcon(Icons.event), findsOneWidget);
+    expect(find.text('10月5日(月)'), findsOneWidget);
+    expect(find.text('+2時間30分'), findsOneWidget);
     expect(find.text('対象'), findsOneWidget);
     expect(find.text('UserA'), findsOneWidget);
-    expect(find.text('UserB'), findsOneWidget);
+    expect(find.text('→ UserB'), findsOneWidget);
     expect(find.text('+new line'), findsOneWidget);
     expect(find.text('-old line'), findsOneWidget);
   });
