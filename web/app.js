@@ -476,39 +476,60 @@ function valueChip(v, isBefore) {
   return chip;
 }
 
-/* その日の予定表で「どこからどこへ動いたか」を描く: 変更前の枠(破線)と
- * 変更後の枠(塗り)を時間軸上に重ねる。Event duration は properties.duration
- * (分, 既定60)。すべて表示上の計算で、実データには触れない。 */
+/* その日の予定表で「枠がどこへ移動したか」を空間的に描く:
+ * 開始も終了も変わるので、ゴースト枠(変更前 [b, b+dur])と、そこから
+ * スライドしてくる白い枠(変更後 [a, a+dur])を重ね、 displacement を
+ * 上のブランケット(矢印+デルタ)で示す。すべて表示計算のみ。 */
 function dayTimeline(bv, av, durationMin) {
   const dur = Number.isFinite(durationMin) && durationMin > 0 ? durationMin : 60;
   const b = minutesOf(bv.time);
   const a = minutesOf(av.time);
   let start = Math.max(0, Math.floor(Math.min(b, a) / 60) * 60);
   let end = Math.min(24 * 60, Math.ceil((Math.max(b, a) + dur) / 60) * 60);
-  if (end - start < 120) {
-    start = Math.max(0, end - 120);
-  }
+  if (end - start < 120) start = Math.max(0, end - 120);
   const span = end - start;
   const pos = (m) => ((m - start) / span) * 100;
+  const fmt = (m) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+  const slotLabel = (m) => `${fmt(m)} – ${fmt(m + dur)}`;
 
   const track = el('div', 'dvv-tl');
+
+  // displacement bracket: ghost end → slot start, arrow + delta chip
+  const bracket = el('div', 'dvv-tl-shift');
+  const delta = deltaLabel(bv, av);
+  const gapStart = Math.min(b + dur, a);
+  const gapEnd = Math.max(b + dur, a);
+  if (delta) {
+    const line = el('div', 'dvv-tl-bracket');
+    line.style.left = `${pos(gapStart)}%`;
+    line.style.width = `${Math.max(0, ((gapEnd - gapStart) / span) * 100)}%`;
+    const chip = el('span', 'dvv-tl-delta', delta);
+    chip.style.left = `${(pos(gapStart) + pos(gapEnd)) / 2}%`;
+    bracket.append(line, chip);
+  }
+  track.appendChild(bracket);
+
+  // bars: ghost (before) + the slot that slid into place (after)
   const bars = el('div', 'dvv-tl-bars');
-  const beforeBar = el('div', 'dvv-tl-bar before', `変更前 ${bv.time}`);
-  beforeBar.style.left = `${pos(b)}%`;
-  beforeBar.style.width = `${(dur / span) * 100}%`;
-  const afterBar = el('div', 'dvv-tl-bar after', `変更後 ${av.time}`);
-  afterBar.style.left = `${pos(a)}%`;
-  afterBar.style.width = `${(dur / span) * 100}%`;
-  bars.append(beforeBar, afterBar);
+  const ghost = el('div', 'dvv-tl-bar ghost', slotLabel(b));
+  ghost.style.left = `${pos(b)}%`;
+  ghost.style.width = `${(dur / span) * 100}%`;
+  const slot = el('div', 'dvv-tl-bar slot', slotLabel(a));
+  slot.style.left = `${pos(a)}%`;
+  slot.style.width = `${(dur / span) * 100}%`;
+  // 空間の移動: the block starts where the ghost is and slides to its
+  // new position (shift in element-widths; sign handles either direction)
+  slot.style.setProperty('--shift', `${((b - a) / dur) * 100}%`);
+  bars.append(ghost, slot);
   track.appendChild(bars);
 
+  // boundary ticks: both edges of BOTH slots (前も後ろも動く)
   const ticks = el('div', 'dvv-tl-ticks');
-  for (let t = start; t <= end; t += 60) {
-    const tick = el('span', 'dvv-tl-tick');
-    tick.style.left = `${pos(t)}%`;
+  for (const [m, kind] of [[b, 'ghost'], [b + dur, 'ghost'], [a, 'slot'], [a + dur, 'slot']]) {
+    const tick = el('span', `dvv-tl-tick ${kind}`);
+    tick.style.left = `${pos(m)}%`;
     tick.appendChild(el('span', 'dvv-tl-tickline'));
-    tick.appendChild(el('span', 'dvv-tl-ticklabel',
-      `${String(Math.floor(t / 60) % 24).padStart(2, '0')}:00`));
+    tick.appendChild(el('span', 'dvv-tl-ticklabel', fmt(m)));
     ticks.appendChild(tick);
   }
   track.appendChild(ticks);

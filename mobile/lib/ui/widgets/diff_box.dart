@@ -354,8 +354,11 @@ class _ValueChips extends StatelessWidget {
   }
 }
 
-/// Day timeline (mirror of web dayTimeline): where the event moved on
-/// that day's schedule — dashed outline = before, filled = after.
+/// Day timeline (mirror of web dayTimeline): the SLOT MOVES. Ghost slot
+/// (変更前 [b, b+dur], dashed) + the white slot that slides from the
+/// ghost position into place (変更後 [a, a+dur]), with a displacement
+/// bracket (+delta) above and both boundaries of both slots ticked below
+/// — changing the time moves the start AND the end.
 class _DayTimeline extends StatelessWidget {
   final String beforeTime;
   final String afterTime;
@@ -376,79 +379,207 @@ class _DayTimeline extends StatelessWidget {
     if (end - start < 120) start = math.max(0, end - 120);
     final span = (end - start).toDouble();
     double frac(int m) => ((m - start) / span).clamp(0.0, 1.0);
-
-    final ticks = <Widget>[];
-    for (var t = start; t <= end; t += 60) {
-      final f = frac(t);
-      final alignment = Alignment(f * 2 - 1, 0);
-      ticks.add(
-        Align(
-          alignment: alignment,
-          child: Text(
-            '${(t ~/ 60) % 24}:00',
-            style: const TextStyle(
-              fontSize: 10,
-              fontWeight: FontWeight.w600,
-              color: PopColors.text3,
-              fontFeatures: [FontFeature.tabularFigures()],
-            ),
-          ),
-        ),
-      );
-    }
+    String fmt(int m) =>
+        '${(m ~/ 60) % 24}:${(m % 60).toString().padLeft(2, '0')}';
+    final gapStart = math.min(b + durationMin, a);
+    final gapEnd = math.max(b + durationMin, a);
+    final delta = _deltaLabelFor(b, a, durationMin);
 
     return Padding(
       padding: const EdgeInsets.only(top: 10),
       child: Column(
         children: [
-          Stack(
-            children: [
-              Container(
-                height: 30,
-                decoration: BoxDecoration(
-                  color: const Color(0x29787880),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-              _timelineBar(frac(b), durationMin / span, before: true),
-              _timelineBar(frac(a), durationMin / span, before: false),
-            ],
-          ),
-          const SizedBox(height: 3),
+          // displacement bracket (ghost end → slot start)
           SizedBox(
-            height: 14,
-            child: Stack(children: ticks),
+            height: 22,
+            child: Stack(
+              children: [
+                _bracketLine(frac(gapStart), frac(gapEnd)),
+                Align(
+                  alignment:
+                      Alignment(((frac(gapStart) + frac(gapEnd)) / 2) * 2 - 1, 0),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 9, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: PopColors.fill2,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      delta,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: PopColors.text,
+                        fontFeatures: [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // the track: ghost + sliding slot
+          SizedBox(
+            height: 44,
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: const Color(0x29787880),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+                _slotBar(
+                  leftFrac: frac(b),
+                  widthFrac: durationMin / span,
+                  label: '${fmt(b)} – ${fmt(b + durationMin)}',
+                  ghost: true,
+                ),
+                // the slot slides from the ghost position into place
+                TweenAnimationBuilder<double>(
+                  tween: Tween(begin: 0, end: 1),
+                  duration: const Duration(milliseconds: 700),
+                  curve: Curves.easeOutCubic,
+                  builder: (context, t, _) => _slotBar(
+                    leftFrac:
+                        frac(b) + (frac(a) - frac(b)) * t,
+                    widthFrac: durationMin / span,
+                    label: '${fmt(a)} – ${fmt(a + durationMin)}',
+                    ghost: false,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // boundary ticks: both edges of both slots
+          SizedBox(
+            height: 18,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                for (final (m, kind) in [
+                  (b, 'ghost'),
+                  (b + durationMin, 'ghost'),
+                  (a, 'slot'),
+                  (a + durationMin, 'slot'),
+                ])
+                  Align(
+                    alignment: Alignment(frac(m) * 2 - 1, 0),
+                    child: Column(
+                      children: [
+                        Container(
+                          width: 1,
+                          height: 3,
+                          color: kind == 'slot'
+                              ? const Color(0x8CEBEBF5)
+                              : const Color(0x4DEBEBF5),
+                        ),
+                        Text(
+                          fmt(m),
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight:
+                                kind == 'slot' ? FontWeight.w700 : FontWeight.w500,
+                            color: kind == 'slot'
+                                ? PopColors.text
+                                : PopColors.text3,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _timelineBar(double leftFrac, double widthFrac, {required bool before}) {
+  String _deltaLabelFor(int b, int a, int dur) {
+    final diff = a - b;
+    final sign = diff >= 0 ? '+' : '−';
+    final abs = diff.abs();
+    final h = abs ~/ 60;
+    final mm = abs % 60;
+    return sign + (h > 0 ? '$h時間${mm > 0 ? '$mm分' : ''}' : '$mm分');
+  }
+
+  /// Left edge exactly at [leftFrac]: solve Align's placement
+  /// (1 - widthFactor)(a + 1)/2 = leftFrac for a.
+  Widget _slotBar({
+    required double leftFrac,
+    required double widthFrac,
+    required String label,
+    required bool ghost,
+  }) {
+    final w = widthFrac.clamp(0.02, 0.98);
+    final a = 2 * leftFrac / (1 - w) - 1;
     return Align(
-      alignment: Alignment(leftFrac * 2 - 1, 0),
+      alignment: Alignment(a, 0),
       child: FractionallySizedBox(
-        widthFactor: widthFrac.clamp(0.0, 1.0),
+        widthFactor: w,
         child: Container(
-          height: 22,
+          height: 34,
+          margin: const EdgeInsets.symmetric(vertical: 5),
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: before ? Colors.transparent : Colors.white,
-            border: before
-                ? Border.all(color: PopColors.text2, width: 1.4)
+            color: ghost ? Colors.transparent : Colors.white,
+            border: ghost
+                ? Border.all(color: const Color(0x6BEBEBF5), width: 1.4)
                 : null,
-            borderRadius: BorderRadius.circular(6),
+            borderRadius: BorderRadius.circular(9),
+            boxShadow: ghost
+                ? null
+                : [
+                    BoxShadow(
+                      color: Colors.white.withValues(alpha: 0.22),
+                      blurRadius: 14,
+                    ),
+                  ],
           ),
           child: Text(
-            '${before ? '変更前' : '変更後'} ${before ? beforeTime : afterTime}',
+            label,
             maxLines: 1,
             overflow: TextOverflow.clip,
             style: TextStyle(
-              fontSize: 10,
-              fontWeight: FontWeight.w800,
-              color: before ? PopColors.text2 : PopColors.bg,
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
+              color: ghost ? PopColors.text2 : PopColors.bg,
+              fontFeatures: const [FontFeature.tabularFigures()],
             ),
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _bracketLine(double startFrac, double endFrac) {
+    final w = (endFrac - startFrac).clamp(0.0, 1.0);
+    if (w <= 0.01) return const SizedBox.shrink();
+    final a = 2 * startFrac / (1 - w) - 1;
+    return Align(
+      alignment: Alignment(a, 0),
+      child: FractionallySizedBox(
+        widthFactor: w,
+        child: Stack(
+          children: [
+            Container(
+              height: 1,
+              margin: const EdgeInsets.only(top: 11),
+              color: const Color(0x66EBEBF5),
+            ),
+            const Positioned(
+              right: 0,
+              top: 7,
+              child: Icon(Icons.arrow_forward_ios,
+                  size: 8, color: Color(0x66EBEBF5)),
+            ),
+          ],
         ),
       ),
     );
