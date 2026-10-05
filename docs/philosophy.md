@@ -4,6 +4,7 @@
 > 機能の採否で迷ったら、ここに照らして決める。原則そのものを変えるときは
 > このファイルを更新し、理由を「改訂履歴」に残す。
 > 仕様は [protocol.md](protocol.md) / [architecture.md](architecture.md)、
+> UI・フロントエンド設計原則は [design-philosophy.md](design-philosophy.md)、
 > 原案は [requirements.ja.md](requirements.ja.md)、アイデア置き場は
 > [../IDEA.md](../IDEA.md)、実行計画は [../TODO.md](../TODO.md)。
 
@@ -104,4 +105,5 @@ Diff・信頼度・理由はその次。思考ログや出典はカードの裏(
 
 ## 改訂履歴
 
+- 2026-10-06: フロントエンド特化の洗練指針を [design-philosophy.md](design-philosophy.md) として独立策定。
 - 2026-10-05: 初版。

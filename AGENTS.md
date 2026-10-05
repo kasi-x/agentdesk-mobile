@@ -81,7 +81,7 @@ mobile/               Flutter app (card stack UI, SSE, offline queue)
   lib/ui/genui_form.dart  genui A2UI adapter for inspect-form rendering
 web/                  zero-build browser triage UI (served as Worker assets)
 tools/                mock-agent.mjs (send / listen) for local E2E
-docs/                 requirements (JA), protocol spec, architecture, philosophy
+docs/                 requirements (JA), protocol spec, architecture, philosophy, design-philosophy
 IDEA.md               idea backlog (I-xxx ids, status)
 TODO.md               prioritized plan derived from IDEA.md
 
@@ -105,12 +105,12 @@ TODO.md               prioritized plan derived from IDEA.md
 - **DO concurrency**: rely on Durable Object input gates for the
   read-decide-write cycle in `task-hub.ts`; do not "optimize" the
   storage awaits away (see docs/architecture.md).
-- **Ideas → IDEA.md, plans → TODO.md, principles → docs/philosophy.md.**
+- **Ideas → IDEA.md, plans → TODO.md, principles → docs/philosophy.md / design-philosophy.md.**
   New ideas go to `IDEA.md` first (with an `I-xxx` id and status); only
   accepted ones become tasks in `TODO.md`. When a task is done, tick it
   in `TODO.md` and set the idea to `done` in `IDEA.md` in the same commit.
-  Feature decisions should be checkable against `docs/philosophy.md`;
-  changing a principle requires updating its revision log.
+  Feature decisions should be checkable against `docs/philosophy.md` and
+  UI decisions against `docs/design-philosophy.md`.
 - Update this file in the same commit when introducing a new convention.
 
 ## Status / roadmap

@@ -76,7 +76,8 @@
       nonce + 楽観ロック、他端末への dismiss 配信、エージェントへの返送
 - [x] Phase 2: genui インスペクトフォーム、DiffBox の `rows` / `inline`、Web トリアージUI、
       同一オリジン POST の修正
-- [x] docs/philosophy.md / IDEA.md / TODO.md を作成 (I-404)
+- [x] docs/philosophy.md / docs/design-philosophy.md / IDEA.md / TODO.md を作成・体系化 (I-404)
+- [x] **フロントエンド洗練の設計原則** (docs/design-philosophy.md): 余計な情報を出さない（信頼度・二重表示の完全排除）、必要な情報を端的に出す（Impact First）、拡張ビューの一本化（詳細を見る）、ドメイン最適グラフィック（カレンダー・タイムライン、DiffBox、Quote Block）の4本柱を言語化
 - [x] **Undo猶予** (I-104): `committing` 状態 + `commitAt`、alarm 一本化、
       `POST /api/v1/actions/undo` (nonce ローテ + 再配信、processed 後は `409 too_late`)、
       mobile/web の「元に戻す」トースト、vitest + smoke 追加
