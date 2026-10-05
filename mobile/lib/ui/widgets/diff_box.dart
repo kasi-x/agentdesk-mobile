@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../colors.dart';
@@ -78,13 +80,18 @@ class DiffBox extends StatelessWidget {
                     ),
               ),
             ),
-          _ValuePair(before: '${properties['before'] ?? ''}', after: '${properties['after'] ?? ''}'),
+          _ValuePair(
+            before: '${properties['before'] ?? ''}',
+            after: '${properties['after'] ?? ''}',
+            durationMin: int.tryParse('${properties['duration'] ?? ''}') ?? 60,
+          ),
           for (final row in _rows) ...[
             const SizedBox(height: 2),
             _ValuePair(
               before: row['before'] ?? '',
               after: row['after'] ?? '',
               label: row['label'],
+              durationMin: int.tryParse('${properties['duration'] ?? ''}') ?? 60,
             ),
           ],
           if (_inline != null) ...[
@@ -167,8 +174,14 @@ class _ValuePair extends StatelessWidget {
   final String before;
   final String after;
   final String? label;
+  final int durationMin;
 
-  const _ValuePair({required this.before, required this.after, this.label});
+  const _ValuePair({
+    required this.before,
+    required this.after,
+    this.label,
+    this.durationMin = 60,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -194,7 +207,7 @@ class _ValuePair extends StatelessWidget {
               ),
             ),
           if (meaningful)
-            _ValueChips(bv: bv, av: av)
+            _ValueChips(bv: bv, av: av, durationMin: durationMin)
           else ...[
             Text(
               before,
@@ -224,8 +237,9 @@ class _ValuePair extends StatelessWidget {
 class _ValueChips extends StatelessWidget {
   final _ParsedValue bv;
   final _ParsedValue av;
+  final int durationMin;
 
-  const _ValueChips({required this.bv, required this.av});
+  const _ValueChips({required this.bv, required this.av, this.durationMin = 60});
 
   @override
   Widget build(BuildContext context) {
@@ -290,6 +304,12 @@ class _ValueChips extends StatelessWidget {
               ),
           ],
         ),
+        if (bv.kind == _ValueKind.datetime && bv.dateKey == av.dateKey)
+          _DayTimeline(
+            beforeTime: bv.time,
+            afterTime: av.time,
+            durationMin: durationMin,
+          ),
       ],
     );
   }
@@ -328,6 +348,107 @@ class _ValueChips extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Day timeline (mirror of web dayTimeline): where the event moved on
+/// that day's schedule — dashed outline = before, filled = after.
+class _DayTimeline extends StatelessWidget {
+  final String beforeTime;
+  final String afterTime;
+  final int durationMin;
+
+  const _DayTimeline({
+    required this.beforeTime,
+    required this.afterTime,
+    required this.durationMin,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final b = _minutesOf(beforeTime);
+    final a = _minutesOf(afterTime);
+    int start = (math.min(b, a) ~/ 60) * 60;
+    int end = math.min(24 * 60, ((math.max(b, a) + durationMin) / 60).ceil() * 60);
+    if (end - start < 120) start = math.max(0, end - 120);
+    final span = (end - start).toDouble();
+    double frac(int m) => ((m - start) / span).clamp(0.0, 1.0);
+
+    final ticks = <Widget>[];
+    for (var t = start; t <= end; t += 60) {
+      final f = frac(t);
+      final alignment = Alignment(f * 2 - 1, 0);
+      ticks.add(
+        Align(
+          alignment: alignment,
+          child: Text(
+            '${(t ~/ 60) % 24}:00',
+            style: const TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF6B6F60),
+              fontFeatures: [FontFeature.tabularFigures()],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Column(
+        children: [
+          Stack(
+            children: [
+              Container(
+                height: 30,
+                decoration: BoxDecoration(
+                  color: const Color(0x141B1E16),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              _timelineBar(frac(b), durationMin / span, before: true),
+              _timelineBar(frac(a), durationMin / span, before: false),
+            ],
+          ),
+          const SizedBox(height: 3),
+          SizedBox(
+            height: 14,
+            child: Stack(children: ticks),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _timelineBar(double leftFrac, double widthFrac, {required bool before}) {
+    return Align(
+      alignment: Alignment(leftFrac * 2 - 1, 0),
+      child: FractionallySizedBox(
+        widthFactor: widthFrac.clamp(0.0, 1.0),
+        child: Container(
+          height: 22,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: before ? Colors.transparent : PopColors.ink,
+            border: before
+                ? Border.all(color: const Color(0x801B1E16), width: 1.4)
+                : null,
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Text(
+            '${before ? '変更前' : '変更後'} ${before ? beforeTime : afterTime}',
+            maxLines: 1,
+            overflow: TextOverflow.clip,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+              color: before ? PopColors.inkSoft : Colors.white,
+            ),
+          ),
+        ),
       ),
     );
   }
