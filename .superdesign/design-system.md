@@ -34,9 +34,12 @@ Reference: bold color-coded task cards on warm dark chrome with pill UI.
 - Inter + Hiragino/Noto Sans JP; tabular-nums for all numeric meta;
   uppercase tracked micro-labels.
 - Radii: 24px cards, 24px sheet top, 999px pills. Max content width 540px.
-- Motion (meaning-serving, reduced-motion-safe): spring entrances
-  `cubic-bezier(.22,1.2,.36,1)` (card 280ms, sheet 300ms), staggered queue
-  minis 30ms, press `scale(.96)`, urgent pulse, connected-dot breathing.
+- Motion (meaning-serving, reduced-motion-safe): **Animate UI motion DNA**
+  translated to CSS — sampled framer spring (stiffness 200 / damping 20) as a
+  `linear()` easing token, blur reveal (blur 10→0) on cards/toasts with 40ms
+  per-element stagger, shine sweep (skewX -15°) on the amber CTA, counting
+  number tween on the pending pill, press `scale(.96)`, urgent pulse,
+  connected-dot breathing.
 - Flutter mirror: `mobile/lib/ui/colors.dart` (PopColors) + `theme.dart`.
 
 ## Motion patterns allowed
