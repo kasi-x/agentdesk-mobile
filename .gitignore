@@ -10,3 +10,6 @@ dist/
 # logs / OS
 *.log
 .DS_Store
+
+# superdesign scratch
+.superdesign/tmp/
