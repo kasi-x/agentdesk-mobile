@@ -479,7 +479,7 @@ function valueChip(v, isBefore) {
 /* その日の予定表で「枠がどこへ移動したか」を空間的に描く:
  * 開始も終了も変わるので、ゴースト枠(変更前 [b, b+dur])と、そこから
  * スライドしてくる白い枠(変更後 [a, a+dur])を重ね、 displacement を
- * 上のブランケット(矢印+デルタ)で示す。すべて表示計算のみ。 */
+ * 開始・終了の両境界を目盛りに示す。すべて表示計算のみ。 */
 function dayTimeline(bv, av, durationMin) {
   const dur = Number.isFinite(durationMin) && durationMin > 0 ? durationMin : 60;
   const b = minutesOf(bv.time);
@@ -494,22 +494,8 @@ function dayTimeline(bv, av, durationMin) {
 
   const track = el('div', 'dvv-tl');
 
-  // displacement bracket: ghost end → slot start, arrow + delta chip
-  const bracket = el('div', 'dvv-tl-shift');
-  const delta = deltaLabel(bv, av);
-  const gapStart = Math.min(b + dur, a);
-  const gapEnd = Math.max(b + dur, a);
-  if (delta) {
-    const line = el('div', 'dvv-tl-bracket');
-    line.style.left = `${pos(gapStart)}%`;
-    line.style.width = `${Math.max(0, ((gapEnd - gapStart) / span) * 100)}%`;
-    const chip = el('span', 'dvv-tl-delta', delta);
-    chip.style.left = `${(pos(gapStart) + pos(gapEnd)) / 2}%`;
-    bracket.append(line, chip);
-  }
-  track.appendChild(bracket);
-
-  // bars: ghost (before) + the slot that slid into place (after)
+  // bars: ghost (before) + the slot that slid into place (after).
+  // The delta chip already rides the chips row above — no bracket lane.
   const bars = el('div', 'dvv-tl-bars');
   const ghost = el('div', 'dvv-tl-bar ghost', slotLabel(b));
   ghost.style.left = `${pos(b)}%`;
@@ -542,13 +528,13 @@ function renderValuePair(parent, label, beforeRaw, afterRaw, opts = {}) {
   const bv = parseValue(beforeRaw);
   const av = parseValue(afterRaw);
   if (bv && av && bv.kind === av.kind) {
-    if (bv.kind === 'datetime') {
-      const dateRow = el('div', 'dvv-date');
-      dateRow.appendChild(diffIcon('calendar'));
-      dateRow.appendChild(el('span', 'dvv-date-text', bv.date));
-      row.appendChild(dateRow);
-    }
     const chips = el('div', 'dvv-chips');
+    if (bv.kind === 'datetime') {
+      const dateChip = el('span', 'dvv-date');
+      dateChip.appendChild(diffIcon('calendar'));
+      dateChip.appendChild(el('span', 'dvv-date-text', bv.date));
+      chips.appendChild(dateChip);
+    }
     chips.appendChild(valueChip(bv, true));
     chips.appendChild(diffIcon('arrow-right', 'dvv-arrow'));
     chips.appendChild(valueChip(av, false));
@@ -695,14 +681,9 @@ function renderCard(task) {
   header.appendChild(timeWrap);
   inner.appendChild(header);
 
-  // Headline: the summary. Then the 承認すると… line (the result, first).
+  // Headline: the summary. The 承認すると… result statement lives in
+  // 詳細 (結果 row) — the front stays as short as possible.
   inner.appendChild(el('div', 'summary', task.summary || ''));
-  if (impact && typeof impact.summary === 'string' && impact.summary) {
-    const line = el('div', 'impact-text');
-    if (impact.reversible === false) line.appendChild(el('span', 'tag-no', '取り消し不可'));
-    line.appendChild(document.createTextNode(`承認すると ${impact.summary}`));
-    inner.appendChild(line);
-  }
 
   // Information reduction (P1/P8): caption/external texts are 裏面 material —
   // they render inside the details panel, not on the front.

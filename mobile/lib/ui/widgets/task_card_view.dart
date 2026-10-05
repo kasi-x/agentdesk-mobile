@@ -88,12 +88,12 @@ class _TaskCardViewState extends State<TaskCardView> {
             child: Stack(
               children: [
                 Padding(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(12),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       _header(),
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 8),
                       Text(
                         task.summary,
                         style: const TextStyle(
@@ -104,18 +104,14 @@ class _TaskCardViewState extends State<TaskCardView> {
                           color: PopColors.text,
                         ),
                       ),
-                      if (task.impact?.summary != null) ...[
-                        const SizedBox(height: 4),
-                        _impactLine(),
-                      ],
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 8),
                       for (final component in _frontComponents) ...[
                         ComponentRenderer(
                           component: component,
                           onAction: widget.onQuickAction,
                           onInspect: widget.onInspect,
                         ),
-                        const SizedBox(height: 10),
+                        const SizedBox(height: 8),
                       ],
                       _metaLine(),
                       if (_hasDetails) ...[
@@ -179,39 +175,6 @@ class _TaskCardViewState extends State<TaskCardView> {
         Text(
           widget.timeAgo(task.createdAt),
           style: const TextStyle(fontSize: 13, color: PopColors.text3),
-        ),
-      ],
-    );
-  }
-
-  /// 「承認すると…」+ 取り消し不可 tag — the result, stated first (P3).
-  Widget _impactLine() {
-    final impact = task.impact!;
-    return Wrap(
-      crossAxisAlignment: WrapCrossAlignment.center,
-      children: [
-        if (impact.reversible == false)
-          Container(
-            margin: const EdgeInsets.only(right: 7),
-            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-            decoration: BoxDecoration(
-              color: PopColors.red.withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: const Text(
-              '取り消し不可',
-              style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: PopColors.red),
-            ),
-          ),
-        Text(
-          '承認すると ${impact.summary}',
-          style: const TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w500,
-              color: PopColors.text2),
         ),
       ],
     );
