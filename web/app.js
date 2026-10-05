@@ -704,30 +704,41 @@ function renderCard(task) {
     inner.appendChild(line);
   }
 
+  // Information reduction (P1/P8): caption/external texts are 裏面 material —
+  // they render inside the details panel, not on the front.
+  const movedTexts = [];
   for (const comp of orderedComponents(task)) {
-    inner.appendChild(renderComponent(comp, task));
+    const isNarrative = comp.component === 'Text' &&
+      (comp.properties?.variant === 'caption' || comp.properties?.source === 'external');
+    if (isNarrative) movedTexts.push(comp);
+    else inner.appendChild(renderComponent(comp, task));
   }
 
-  // Quiet meta: 信頼度 · deadline (only what the decision needs).
+  // Quiet meta: 信頼度 always, deadline only when it is close (otherwise it
+  // lives in 詳細 — the front carries the decision, not the schedule).
   if (pct !== null || task.expiresAt) {
     const meta = el('div', 'meta');
     if (pct !== null) {
       meta.appendChild(el('span', `meta-item${task.confidence < 0.6 ? ' low' : ''}`, `信頼度 ${pct}%`));
     }
     if (typeof task.expiresAt === 'string' && task.expiresAt) {
-      const cd = el('span', 'meta-item countdown');
-      cd.dataset.expires = task.expiresAt;
-      cd.dataset.onexpire = task.onExpire || 'drop';
-      updateCountdown(cd);
-      meta.appendChild(cd);
+      const parts = countdownParts(task.expiresAt, task.onExpire || 'drop');
+      if (parts.cls) {
+        const cd = el('span', 'meta-item countdown');
+        cd.dataset.expires = task.expiresAt;
+        cd.dataset.onexpire = task.onExpire || 'drop';
+        updateCountdown(cd);
+        meta.appendChild(cd);
+      }
     }
     inner.appendChild(meta);
   }
 
-  // 詳細を見る — 理由/誰が/参加者/出典/金額/注意点 expand downward.
+  // 詳細を見る — 結果/理由/誰が/参加者/出典/金額/注意点 expand downward.
   const hasContext = !!(ctx && (ctx.reasoning || ctx.requester?.name ||
     (Array.isArray(ctx.participants) && ctx.participants.length) || ctx.source?.label));
-  const hasExtra = hasContext || (impact && impact.cost) ||
+  const hasExtra = hasContext || movedTexts.length > 0 || (impact && impact.summary) ||
+    (impact && impact.cost) ||
     (pct !== null && pct < 90 && reasons.length > 0) || !!task.expiresAt;
   if (hasExtra) {
     const wrap = el('div', 'details');
@@ -739,7 +750,7 @@ function renderCard(task) {
     const panel = el('div', 'details-panel' + (expandedIds.has(task.taskId) ? ' open' : ''));
     if (expandedIds.has(task.taskId)) toggle.classList.add('open');
     const clip = el('div', 'details-clip');
-    clip.appendChild(buildDetailsList(task, { ctx, impact, reasons }));
+    clip.appendChild(buildDetailsList(task, { ctx, impact, reasons, movedTexts }));
     panel.appendChild(clip);
     toggle.addEventListener('click', () => {
       const open = !panel.classList.contains('open');
@@ -860,7 +871,7 @@ function renderCard(task) {
 /* 詳細パネル: 理由 / 誰が / 参加者 / 出典 / 金額 / 注意点 (P1: 裏面)。
  * All payload strings render via textContent (NFR-2.1); links are
  * restricted to http(s) so a payload can never become javascript:. */
-function buildDetailsList(task, { ctx, impact, reasons }) {
+function buildDetailsList(task, { ctx, impact, reasons, movedTexts = [] }) {
   const list = el('div', 'details-list');
   const row = (label, node) => {
     const r = el('div', 'drow');
@@ -871,8 +882,36 @@ function buildDetailsList(task, { ctx, impact, reasons }) {
   const safeHref = (url) =>
     typeof url === 'string' && /^https?:\/\//i.test(url) ? url : null;
 
-  if (ctx && ctx.reasoning) {
-    row('なぜ', el('div', 'drow-value', ctx.reasoning));
+  // the result statement lives at the top of 裏面 (P3: 結果を先に — but the
+  // front now carries only the diff, so restate it here in full)
+  if (impact && typeof impact.summary === 'string' && impact.summary) {
+    const v = el('div', 'drow-value', `承認すると ${impact.summary}`);
+    if (impact.reversible === false) {
+      v.appendChild(el('div', 'sub', 'この操作は取り消せません'));
+    }
+    row('結果', v);
+  }
+  // なぜ: caption texts moved off the front + context.reasoning merge
+  // into ONE row (they are the same kind of information)
+  const narrative = movedTexts.filter(
+    (comp) => comp.component === 'Text' && comp.properties?.source !== 'external',
+  );
+  const quotes = movedTexts.filter(
+    (comp) => comp.component === 'Text' && comp.properties?.source === 'external',
+  );
+  if (narrative.length > 0 || (ctx && ctx.reasoning)) {
+    const v = el('div', 'drow-value');
+    for (const comp of narrative) {
+      v.appendChild(el('div', '', String(comp.properties?.text ?? '')));
+    }
+    if (ctx && ctx.reasoning) {
+      v.appendChild(el('div', '', ctx.reasoning));
+    }
+    row('なぜ', v);
+  }
+  for (const comp of quotes) {
+    const node = renderComponent(comp, task).firstChild;
+    row('引用', node);
   }
   if (ctx && ctx.requester && ctx.requester.name) {
     const v = el('div', 'drow-value', ctx.requester.name);

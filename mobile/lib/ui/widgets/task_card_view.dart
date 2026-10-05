@@ -36,6 +36,18 @@ class _TaskCardViewState extends State<TaskCardView> {
 
   TaskCard get task => widget.task;
 
+  /// Caption / external texts are 裏面 material — they render in the
+  /// details panel, not on the front (information reduction, P1/P8).
+  late final List<CardComponent> _movedTexts = task.bodyComponents
+      .where((c) =>
+          c.component == 'Text' &&
+          (c.properties['variant'] == 'caption' ||
+              c.properties['source'] == 'external'))
+      .toList();
+  late final List<CardComponent> _frontComponents = task.bodyComponents
+      .where((c) => !_movedTexts.contains(c))
+      .toList();
+
   bool get _hasDetails {
     final ctx = task.context;
     final impact = task.impact;
@@ -45,6 +57,8 @@ class _TaskCardViewState extends State<TaskCardView> {
             ctx.participants.isNotEmpty ||
             ctx.sourceLabel != null);
     return hasContext ||
+        _movedTexts.isNotEmpty ||
+        (impact?.summary != null) ||
         (impact?.costAmount != null) ||
         (task.confidence < 0.9 && task.confidenceReasons.isNotEmpty) ||
         task.expiresAt != null;
@@ -95,7 +109,7 @@ class _TaskCardViewState extends State<TaskCardView> {
                         _impactLine(),
                       ],
                       const SizedBox(height: 10),
-                      for (final component in task.bodyComponents) ...[
+                      for (final component in _frontComponents) ...[
                         ComponentRenderer(
                           component: component,
                           onAction: widget.onQuickAction,
@@ -108,8 +122,6 @@ class _TaskCardViewState extends State<TaskCardView> {
                         const SizedBox(height: 4),
                         _detailsSection(),
                       ],
-                      const SizedBox(height: 8),
-                      _footerHints(),
                     ],
                   ),
                 ),
@@ -221,28 +233,28 @@ class _TaskCardViewState extends State<TaskCardView> {
         ),
       ),
     ];
+    // deadline surfaces on the front only when it is close; the full
+    // deadline lives in 詳細 (P8: the front carries the decision).
     if (task.expiresAt != null) {
       final remaining = task.expiresAt!.difference(DateTime.now());
       final urgent =
           remaining.inSeconds <= 0 || remaining <= const Duration(minutes: 5);
       final soon = !urgent && remaining <= const Duration(minutes: 30);
-      final when = remaining.inSeconds <= 0
-          ? '期限切れ'
-          : '残り ${_formatRemaining(remaining)}';
-      items.add(
-        Text(
-          when,
-          style: TextStyle(
-            fontSize: 13,
-            fontFeatures: const [FontFeature.tabularFigures()],
-            color: urgent
-                ? PopColors.red
-                : soon
-                    ? PopColors.orange
-                    : PopColors.text2,
+      if (urgent || soon) {
+        final when = remaining.inSeconds <= 0
+            ? '期限切れ'
+            : '残り ${_formatRemaining(remaining)}';
+        items.add(
+          Text(
+            when,
+            style: TextStyle(
+              fontSize: 13,
+              fontFeatures: const [FontFeature.tabularFigures()],
+              color: urgent ? PopColors.red : PopColors.orange,
+            ),
           ),
-        ),
-      );
+        );
+      }
     }
     return Row(
       children: [
@@ -310,33 +322,12 @@ class _TaskCardViewState extends State<TaskCardView> {
             child: open
                 ? Padding(
                     padding: const EdgeInsets.only(bottom: 12),
-                    child: _DetailsPanel(task: task),
+                    child: _DetailsPanel(task: task, movedTexts: _movedTexts),
                   )
                 : const SizedBox(width: double.infinity),
           ),
         ],
       ),
-    );
-  }
-
-  Widget _footerHints() {
-    return const Row(
-      children: [
-        Icon(Icons.swipe_left, size: 14, color: PopColors.text3),
-        SizedBox(width: 4),
-        Text('Reject',
-            style: TextStyle(fontSize: 11, color: PopColors.text3)),
-        Spacer(),
-        Icon(Icons.touch_app, size: 14, color: PopColors.text3),
-        SizedBox(width: 4),
-        Text('Inspect',
-            style: TextStyle(fontSize: 11, color: PopColors.text3)),
-        Spacer(),
-        Text('Approve',
-            style: TextStyle(fontSize: 11, color: PopColors.text3)),
-        SizedBox(width: 4),
-        Icon(Icons.swipe_right, size: 14, color: PopColors.text3),
-      ],
     );
   }
 
@@ -408,13 +399,20 @@ class _TaskCardViewState extends State<TaskCardView> {
 /// Inset grouped rows, iOS list style. Links stay label-only on mobile.
 class _DetailsPanel extends StatelessWidget {
   final TaskCard task;
+  final List<CardComponent> movedTexts;
 
-  const _DetailsPanel({required this.task});
+  const _DetailsPanel({required this.task, this.movedTexts = const []});
 
   @override
   Widget build(BuildContext context) {
     final ctx = task.context;
     final impact = task.impact;
+    final narrative = movedTexts
+        .where((c) => c.properties['source'] != 'external')
+        .toList();
+    final quotes = movedTexts
+        .where((c) => c.properties['source'] == 'external')
+        .toList();
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 4),
       decoration: BoxDecoration(
@@ -424,9 +422,41 @@ class _DetailsPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (ctx?.reasoning != null)
-            _row('なぜ',
-                Text(ctx!.reasoning!, style: const TextStyle(fontSize: 14, height: 1.5, color: PopColors.text))),
+          if (impact?.summary != null)
+            _row(
+              '結果',
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('承認すると ${impact!.summary}',
+                      style: const TextStyle(
+                          fontSize: 14, color: PopColors.text)),
+                  if (impact.reversible == false)
+                    const Text('この操作は取り消せません',
+                        style: TextStyle(
+                            fontSize: 13, color: PopColors.text2)),
+                ],
+              ),
+            ),
+          if (narrative.isNotEmpty || ctx?.reasoning != null)
+            _row(
+              'なぜ',
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final c in narrative)
+                    Text('${c.properties['text'] ?? ''}',
+                        style: const TextStyle(
+                            fontSize: 14, height: 1.5, color: PopColors.text)),
+                  if (ctx?.reasoning != null)
+                    Text(ctx!.reasoning!,
+                        style: const TextStyle(
+                            fontSize: 14, height: 1.5, color: PopColors.text)),
+                ],
+              ),
+            ),
+          for (final c in quotes)
+            _row('引用', ComponentRenderer(component: c)),
           if (ctx?.requesterName != null)
             _row(
               '誰が',
