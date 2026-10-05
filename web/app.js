@@ -392,12 +392,6 @@ function timeAgo(iso) {
   return `${Math.floor(s / 86400)}日前`;
 }
 
-function confidenceClass(c) {
-  if (c >= 0.9) return 'green';
-  if (c >= 0.6) return 'yellow';
-  return 'red';
-}
-
 /** Render order: children of TriageCard if present, else array order. */
 function orderedComponents(task) {
   const list = Array.isArray(task.components) ? task.components : [];
@@ -509,16 +503,8 @@ function dayTimeline(bv, av, durationMin) {
   bars.append(ghost, slot);
   track.appendChild(bars);
 
-  // boundary ticks: both edges of BOTH slots (前も後ろも動く)
-  const ticks = el('div', 'dvv-tl-ticks');
-  for (const [m, kind] of [[b, 'ghost'], [b + dur, 'ghost'], [a, 'slot'], [a + dur, 'slot']]) {
-    const tick = el('span', `dvv-tl-tick ${kind}`);
-    tick.style.left = `${pos(m)}%`;
-    tick.appendChild(el('span', 'dvv-tl-tickline'));
-    tick.appendChild(el('span', 'dvv-tl-ticklabel', fmt(m)));
-    ticks.appendChild(tick);
-  }
-  track.appendChild(ticks);
+  // No tick row: both boundary times already ride the slot labels above —
+  // information is shown once, not three times.
   return track;
 }
 
@@ -695,24 +681,19 @@ function renderCard(task) {
     else inner.appendChild(renderComponent(comp, task));
   }
 
-  // Quiet meta: 信頼度 always, deadline only when it is close (otherwise it
-  // lives in 詳細 — the front carries the decision, not the schedule).
-  if (pct !== null || task.expiresAt) {
-    const meta = el('div', 'meta');
-    if (pct !== null) {
-      meta.appendChild(el('span', `meta-item${task.confidence < 0.6 ? ' low' : ''}`, `信頼度 ${pct}%`));
+  // Quiet meta: ONLY the urgent countdown (<=5m / past). 信頼度 is gone
+  // (user decision); the full deadline lives in 詳細 — one place, never two.
+  if (typeof task.expiresAt === 'string' && task.expiresAt) {
+    const parts = countdownParts(task.expiresAt, task.onExpire || 'drop');
+    if (parts.cls === 'urgent' || parts.cls === 'past') {
+      const meta = el('div', 'meta');
+      const cd = el('span', 'meta-item countdown urgent');
+      cd.dataset.expires = task.expiresAt;
+      cd.dataset.onexpire = task.onExpire || 'drop';
+      updateCountdown(cd);
+      meta.appendChild(cd);
+      inner.appendChild(meta);
     }
-    if (typeof task.expiresAt === 'string' && task.expiresAt) {
-      const parts = countdownParts(task.expiresAt, task.onExpire || 'drop');
-      if (parts.cls) {
-        const cd = el('span', 'meta-item countdown');
-        cd.dataset.expires = task.expiresAt;
-        cd.dataset.onexpire = task.onExpire || 'drop';
-        updateCountdown(cd);
-        meta.appendChild(cd);
-      }
-    }
-    inner.appendChild(meta);
   }
 
   // 詳細を見る — 結果/理由/誰が/参加者/出典/金額/注意点 expand downward.
@@ -954,13 +935,19 @@ function buildDetailsList(task, { ctx, impact, reasons, movedTexts = [] }) {
     for (const r of reasons) wrap.appendChild(el('span', 'dtag', r));
     rowH('warning', '注意点', wrap);
   }
+  // 期限: shown here ONLY while the front shows no urgent countdown —
+  // the deadline is displayed in exactly one place at any moment.
   if (typeof task.expiresAt === 'string' && task.expiresAt) {
-    const at = new Date(task.expiresAt);
-    const when = Number.isNaN(at.getTime())
-      ? task.expiresAt
-      : at.toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-    const verb = { approve: '自動承認', reject: '自動却下', escalate: '緊急化' }[task.onExpire] || '自動破棄';
-    rowH('schedule', '期限', el('span', '', `${when} — ${verb}`));
+    const parts = countdownParts(task.expiresAt, task.onExpire || 'drop');
+    const onFront = parts.cls === 'urgent' || parts.cls === 'past';
+    if (!onFront) {
+      const at = new Date(task.expiresAt);
+      const when = Number.isNaN(at.getTime())
+        ? task.expiresAt
+        : at.toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      const verb = { approve: '自動承認', reject: '自動却下', escalate: '緊急化' }[task.onExpire] || '自動破棄';
+      rowH('schedule', '期限', el('span', '', `${when} — ${verb}`));
+    }
   }
 
   // form editing lives behind one clear affordance at the panel bottom
