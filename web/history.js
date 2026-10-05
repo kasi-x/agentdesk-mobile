@@ -14,6 +14,8 @@ const SOURCE_LABEL = {
   auto: '自動',
   expire: '期限',
   withdraw: '取下げ',
+  bulk: '一括',
+  delegate: '委任',
 };
 
 const WEEKDAYS_JA = '日月火水木金土';
@@ -26,6 +28,21 @@ function metaFor(entry) {
   if (entry.verdict === 'reject') return { glyph: '✕', cls: 'no', label: '却下' };
   if (entry.verdict === 'approve') return { glyph: '✓', cls: 'ok', label: '承認' };
   return { glyph: '•', cls: 'dim', label: a || '処理' };
+}
+
+/**
+ * I-604: the hub gave up delivering a decision to the agent — flag the audit
+ * entry so the tray/history rows carry a ⚠ (the decision itself still counts).
+ */
+export function markDeliveryFailed(taskId) {
+  const row = state.history.find((e) => e.taskId === taskId);
+  if (row && !row.deliveryFailed) {
+    row.deliveryFailed = true;
+    persistHistory();
+    renderTray();
+    const panel = document.getElementById('history-panel');
+    if (panel && !panel.hidden) renderHistory();
+  }
 }
 
 /** Append one audit entry (newest first, capped). Data only — caller renders. */
@@ -67,6 +84,13 @@ function dayLabel(key) {
   return `${mm}月${dd}日(${WEEKDAYS_JA[d.getDay()]})`;
 }
 
+function failedBadge(entry) {
+  if (!entry.deliveryFailed) return null;
+  const w = el('span', 'hist-fail', '⚠');
+  w.title = 'エージェントに返信できませんでした';
+  return w;
+}
+
 function entryRow(entry) {
   const m = metaFor(entry);
   const row = el('button', 'hist-row');
@@ -76,6 +100,8 @@ function entryRow(entry) {
   body.appendChild(el('span', 'hist-summary', entry.summary || entry.action));
   body.appendChild(el('span', 'hist-meta', `${entry.agent} · ${SOURCE_LABEL[entry.source] || entry.source}`));
   row.appendChild(body);
+  const fail = failedBadge(entry);
+  if (fail) row.appendChild(fail);
   row.appendChild(el('span', 'hist-time', timeAgo(entry.at)));
   return row;
 }
@@ -109,6 +135,8 @@ export function renderTray() {
     chip.title = entry.summary || entry.action;
     chip.appendChild(el('span', `hist-ic ${m.cls}`, m.glyph));
     chip.appendChild(el('span', 'tray-chip-text', entry.summary || entry.action));
+    const fail = failedBadge(entry);
+    if (fail) chip.appendChild(fail);
     chip.appendChild(el('span', 'tray-chip-time', timeAgo(entry.at)));
     chip.addEventListener('click', openHistory);
     items.appendChild(chip);

@@ -1930,3 +1930,438 @@ body {
 .settings-actions {
   gap: 8px;
 }
+
+/* ---------- wave 2 (I-114/I-201/I-401/I-402/I-701/I-702/I-703/I-808/I-902) ---------- */
+
+/* header chips: server snooze / quiet-hours counts */
+.chip-count {
+  appearance: none;
+  border: none;
+  border-radius: 999px;
+  background: var(--fill-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chip-count[hidden] {
+  display: none;
+}
+
+.chip-count:hover {
+  background: var(--fill);
+}
+
+.chip-count.dim {
+  color: var(--text-2);
+}
+
+/* rubber-stamp banner (I-401): amber variant of the pause banner */
+.stamp-banner {
+  position: sticky;
+  top: 0;
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 16px;
+  background: rgba(255, 159, 10, 0.94);
+  color: #1c1607;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 4px 18px rgba(255, 159, 10, 0.35);
+}
+
+.stamp-banner[hidden] {
+  display: none;
+}
+
+.stamp-glyph {
+  font-size: 13px;
+}
+
+.stamp-text {
+  flex: 1;
+}
+
+.stamp-close {
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-weight: 700;
+}
+
+/* delegated badge (I-703) */
+.deleg-badge {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--blue);
+  background: rgba(10, 132, 255, 0.14);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+/* multi-approval progress footer (I-902) + delivery warning (I-604) */
+.approve-progress {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--orange);
+  padding: 6px 14px 0;
+}
+
+.delivery-warn {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--orange);
+  padding: 6px 14px 0;
+}
+
+.hist-fail {
+  color: var(--orange);
+  font-size: 14px;
+  margin-left: 6px;
+  flex-shrink: 0;
+}
+
+/* choose cards (decisionKind 'choose'): A top / B bottom */
+.choose-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px 2px;
+}
+
+.choose-opt {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  padding: 12px 14px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.choose-opt:hover {
+  border-color: var(--blue);
+}
+
+.choose-opt:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.choose-key {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--blue);
+  background: rgba(10, 132, 255, 0.14);
+  border-radius: 6px;
+  padding: 3px 8px;
+}
+
+.choose-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* editable stepper (I-114) */
+.editrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 10px 14px 2px;
+}
+
+.edit-step {
+  appearance: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.edit-step:hover {
+  border-color: var(--blue);
+}
+
+.edit-value {
+  min-width: 90px;
+  text-align: center;
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* selectable diff rows (row-select) */
+.diffrow-check {
+  appearance: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 4px 6px;
+  margin: 2px 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.diffrow-check:hover {
+  border-color: var(--border-soft);
+}
+
+.diffrow-check .diffrow-box {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  border-radius: 6px;
+  border: 1.5px solid var(--text-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: transparent;
+}
+
+.diffrow-check.on .diffrow-box {
+  background: var(--green);
+  border-color: var(--green);
+  color: #fff;
+}
+
+.diffrow-check:not(.on) .diffbox-row {
+  opacity: 0.45;
+}
+
+.diffrow-body {
+  flex: 1;
+  min-width: 0;
+}
+
+/* group bundle card (I-201) */
+.group-card {
+  border-style: dashed;
+}
+
+.group-count {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--blue);
+  letter-spacing: 0.02em;
+}
+
+.group-agents {
+  font-size: 12px;
+  color: var(--text-2);
+  margin-top: 4px;
+}
+
+.group-toggle {
+  margin: 2px 14px 0;
+}
+
+.group-members {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 14px 0;
+}
+
+.group-member {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: inherit;
+  font: inherit;
+  padding: 8px 10px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.group-member:hover {
+  border-color: var(--blue);
+}
+
+.mini.group-mini .mini-badge.group {
+  background: rgba(10, 132, 255, 0.2);
+  color: var(--blue);
+}
+
+/* snooze menu + delegate row (transient card popups) */
+.snooze-menu {
+  display: flex;
+  gap: 6px;
+  flex: 1 1 100%;
+  padding: 2px 4px;
+}
+
+.snooze-opt {
+  appearance: none;
+  flex: 1;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 6px;
+  cursor: pointer;
+}
+
+.snooze-opt:hover {
+  border-color: var(--blue);
+}
+
+.delegate-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 100%;
+  padding: 2px 4px;
+}
+
+.delegate-label {
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.delegate-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 14px;
+}
+
+.delegate-input:focus {
+  outline: none;
+  border-color: var(--blue);
+}
+
+/* rubber-stamp two-click arm (I-401) */
+.btn.ok.armed {
+  background: rgba(255, 159, 10, 0.2);
+  color: var(--orange);
+  border: 1px solid var(--orange);
+}
+
+/* settings rows: quiet hours / pairing / push */
+.settings-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.settings-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+}
+
+.settings-times {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+}
+
+.settings-times input[type="time"] {
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 15px;
+}
+
+.settings-times input[type="time"]:focus {
+  outline: none;
+  border-color: var(--blue);
+}
+
+.pair-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pair-result:empty {
+  display: none;
+}
+
+.pair-code {
+  font-family: var(--font-mono);
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-align: center;
+  color: var(--text);
+}
+
+.pair-url {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-2);
+  word-break: break-all;
+}
+
+.pair-url span {
+  flex: 1;
+  min-width: 0;
+}
+
+.pair-qr {
+  align-self: center;
+  border-radius: 12px;
+  max-width: 220px;
+  height: auto;
+}
+
+.pair-exp,
+.pair-error {
+  font-size: 12px;
+  color: var(--text-2);
+  text-align: center;
+}

@@ -14,8 +14,9 @@ import 'widgets/component_renderer.dart';
 Future<void> showInspectSheet(
   BuildContext context,
   TaskCard task,
-  void Function(Map<String, dynamic> data) onApprove,
-) {
+  void Function(Map<String, dynamic> data) onApprove, {
+  VoidCallback? onDelegate,
+}) {
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
@@ -24,15 +25,18 @@ Future<void> showInspectSheet(
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
     ),
-    builder: (_) => _InspectSheet(task: task, onApprove: onApprove),
+    builder: (_) =>
+        _InspectSheet(task: task, onApprove: onApprove, onDelegate: onDelegate),
   );
 }
 
 class _InspectSheet extends StatefulWidget {
   final TaskCard task;
   final void Function(Map<String, dynamic> data) onApprove;
+  final VoidCallback? onDelegate;
 
-  const _InspectSheet({required this.task, required this.onApprove});
+  const _InspectSheet(
+      {required this.task, required this.onApprove, this.onDelegate});
 
   @override
   State<_InspectSheet> createState() => _InspectSheetState();
@@ -153,6 +157,20 @@ class _InspectSheetState extends State<_InspectSheet> {
                     onPressed: () => Navigator.of(context).pop(),
                     child: const Text('閉じる'),
                   ),
+                  if (widget.onDelegate != null) ...[
+                    const SizedBox(height: 4),
+                    OutlinedButton.icon(
+                      icon: const Icon(Icons.forward_to_inbox, size: 18),
+                      label: const Text('同僚に回す'),
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size.fromHeight(48),
+                      ),
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                        widget.onDelegate!();
+                      },
+                    ),
+                  ],
                 ],
               ),
             ),

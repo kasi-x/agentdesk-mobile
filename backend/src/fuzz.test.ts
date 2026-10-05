@@ -88,6 +88,8 @@ function baseCard() {
         { id: "tp", component: "TimePicker", properties: { label: "t" } },
       ],
       rejectReasons: [{ id: "r", label: "reason" }],
+      onSwipeUp: { actionName: "choose_a", payload: { choice: "a" } },
+      onSwipeDown: { actionName: "choose_b", payload: { choice: "b" } },
     },
     impact: {
       summary: "does X",
@@ -106,6 +108,10 @@ function baseCard() {
     protocolVersion: 1,
     groupKey: "grp_1",
     decisionKind: "choose",
+    choices: [
+      { id: "a", label: "Option A" },
+      { id: "b", label: "Option B" },
+    ],
     editable: { componentId: "t", kind: "number", min: 0, max: 10, step: 1 },
     // Hub-attached only (I-206/I-204): an agent that sends these must not
     // have them echoed back by validation.

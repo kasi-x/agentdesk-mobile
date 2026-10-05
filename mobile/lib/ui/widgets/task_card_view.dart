@@ -22,6 +22,34 @@ class TaskCardView extends StatefulWidget {
   /// (I-101); 0 disables the second-stage overlay label.
   final int secondStageThreshold;
 
+  /// Row ids already selected in row-select DiffBoxes (I-112).
+  final Set<String> selectedRowIds;
+
+  /// Fires when a selectable DiffBox row is tapped.
+  final void Function(String rowId)? onRowToggle;
+
+  /// Current edited value for the inline editor (I-114), if touched.
+  final Object? editedValue;
+
+  /// Fires when the inline editor changes.
+  final void Function(Object value)? onEditedValue;
+
+  /// Assignee recorded by the hub or a delegate echo (I-501).
+  final String? delegatedTo;
+
+  /// Approvals already recorded by earlier devices (I-602); shown as
+  /// 「承認 a/b」 when `task.requiredApprovals > 1`.
+  final int approvalCount;
+
+  /// The agent callback delivery failed terminally (I-604).
+  final bool deliveryFailed;
+
+  /// Rubber-stamp detection tripped (I-401): confirm before approving.
+  final bool rubberStamp;
+
+  /// Animated 「更新されました」 on agent updates (I-204).
+  final bool revised;
+
   const TaskCardView({
     super.key,
     required this.task,
@@ -31,6 +59,15 @@ class TaskCardView extends StatefulWidget {
     this.swipePercentX = 0,
     this.swipePercentY = 0,
     this.secondStageThreshold = 0,
+    this.selectedRowIds = const <String>{},
+    this.onRowToggle,
+    this.editedValue,
+    this.onEditedValue,
+    this.delegatedTo,
+    this.approvalCount = 0,
+    this.deliveryFailed = false,
+    this.rubberStamp = false,
+    this.revised = false,
   });
 
   @override
@@ -139,6 +176,17 @@ class _TaskCardViewState extends State<TaskCardView> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     _header(),
+                    if (widget.revised) ...[
+                      const SizedBox(height: 8),
+                      _banner('更新されました', PopColors.green, animate: true),
+                    ],
+                    if (widget.rubberStamp) ...[
+                      const SizedBox(height: 8),
+                      _banner(
+                        '連続承認検知 — 確認してから承認してください',
+                        PopColors.orange,
+                      ),
+                    ],
                     const SizedBox(height: 8),
                     Text(
                       task.summary,
@@ -156,10 +204,16 @@ class _TaskCardViewState extends State<TaskCardView> {
                         component: component,
                         onAction: widget.onQuickAction,
                         onInspect: widget.onInspect,
+                        selectedRowIds: widget.selectedRowIds,
+                        onRowToggle: widget.onRowToggle,
+                        editable: task.editable,
+                        editedValue: widget.editedValue,
+                        onEditedValue: widget.onEditedValue,
                       ),
                       const SizedBox(height: 8),
                     ],
                     _metaLine(),
+                    _approvalFooter(),
                     if (_hasDetails) ...[
                       const SizedBox(height: 4),
                       _detailsSection(),
@@ -266,6 +320,31 @@ class _TaskCardViewState extends State<TaskCardView> {
                 color: PopColors.text2),
           ),
         ),
+        if (widget.delegatedTo != null)
+          Container(
+            margin: const EdgeInsets.only(right: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+            decoration: BoxDecoration(
+              color: PopColors.fill2,
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
+              '→${widget.delegatedTo}',
+              style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: PopColors.text2),
+            ),
+          ),
+        if (widget.deliveryFailed)
+          const Padding(
+            padding: EdgeInsets.only(right: 6),
+            child: Tooltip(
+              message: 'エージェントへの返送に失敗しました',
+              child: Icon(Icons.warning_amber_rounded,
+                  size: 16, color: PopColors.orange),
+            ),
+          ),
         Container(
           width: 7,
           height: 7,
@@ -280,6 +359,53 @@ class _TaskCardViewState extends State<TaskCardView> {
           style: const TextStyle(fontSize: 13, color: PopColors.text3),
         ),
       ],
+    );
+  }
+
+  /// Multi-approver footer (I-602): 「承認 a/b」 while earlier devices
+  /// have recorded approvals below the required quorum.
+  Widget _approvalFooter() {
+    if (task.requiredApprovals <= 1) return const SizedBox.shrink();
+    if (widget.approvalCount <= 0) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Text(
+        '承認 ${widget.approvalCount}/${task.requiredApprovals}',
+        style: const TextStyle(
+          fontSize: 13,
+          fontFeatures: [FontFeature.tabularFigures()],
+          fontWeight: FontWeight.w700,
+          color: PopColors.blue,
+        ),
+      ),
+    );
+  }
+
+  /// Small notice band on the front (wave-2): revised / rubber-stamp.
+  Widget _banner(String text, Color color, {bool animate = false}) {
+    final band = Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.5)),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+            fontSize: 12, fontWeight: FontWeight.w800, color: color),
+      ),
+    );
+    if (!animate) return band;
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 600),
+      curve: Curves.easeOutCubic,
+      builder: (context, t, _) => Opacity(
+        opacity: t.clamp(0.0, 1.0),
+        child: band,
+      ),
     );
   }
 

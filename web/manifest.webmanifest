@@ -1,0 +1,25 @@
+{
+  "name": "AgentDesk",
+  "short_name": "AgentDesk",
+  "description": "エージェント要求のトリアージ (Human-in-the-Loop)",
+  "display": "standalone",
+  "start_url": "/",
+  "scope": "/",
+  "theme_color": "#0f0f10",
+  "background_color": "#0f0f10",
+  "lang": "ja",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' rx='42' fill='%230f0f10'/%3E%3Crect x='42' y='108' width='108' height='42' rx='12' fill='%23ffffff'/%3E%3Crect x='30' y='72' width='132' height='33' rx='12' fill='%23ffffff' opacity='.65'/%3E%3Crect x='54' y='36' width='84' height='33' rx='12' fill='%23ffffff' opacity='.35'/%3E%3C/svg%3E",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='112' fill='%230f0f10'/%3E%3Crect x='112' y='288' width='288' height='112' rx='32' fill='%23ffffff'/%3E%3Crect x='80' y='192' width='352' height='88' rx='32' fill='%23ffffff' opacity='.65'/%3E%3Crect x='144' y='96' width='224' height='88' rx='32' fill='%23ffffff' opacity='.35'/%3E%3C/svg%3E",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable any"
+    }
+  ]
+}

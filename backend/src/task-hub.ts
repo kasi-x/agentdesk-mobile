@@ -1,18 +1,29 @@
 import {
   ActionReply,
+  Approval,
   computePriority,
   decideAction,
   decideUndo,
+  DeviceRecord,
   expiryDue,
   ExpiryDecision,
+  PAIR_TTL_MS,
+  PairCode,
   PROTOCOL_VERSION,
+  Rule,
+  ruleMatches,
   SnapshotPayload,
   StoredTask,
   TaskCardPayload,
   UNDO_GRACE_MS,
   UndoRequest,
+  validatePairRequest,
+  validateRedeemRequest,
+  validateRules,
 } from "./protocol";
 import { encodeSSE, json, sseHeaders, sleep } from "./http";
+import type { PushSubscription } from "./webpush";
+import { sendWebPush } from "./webpush";
 import type { Env } from "./env";
 
 const HEARTBEAT_MS = 15_000;
@@ -23,11 +34,6 @@ const MAX_DELIVERY_ATTEMPTS = 5;
 const DELIVERY_BACKOFF_CAP_MS = 16_000;
 /** Long-poll cap for `GET /api/v1/tasks/{id}/result` (I-901). */
 const MAX_RESULT_WAIT_SEC = 60;
-
-function parseGraceMs(value: string | undefined): number {
-  const parsed = value === undefined ? NaN : Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : UNDO_GRACE_MS;
-}
 
 /** HMAC-SHA256 over `ts.body`, hex — the `v1` half of the signature header (I-801). */
 async function hmacHex(secret: string, payload: string): Promise<string> {
@@ -44,10 +50,38 @@ async function hmacHex(secret: string, payload: string): Promise<string> {
     .join("");
 }
 
-type TriageOutcome =
-  | { ok: true; commitAt?: number; snoozedUntil?: number }
-  | { ok: false; error: string };
+/** SHA-256 hex digest — device tokens are stored hashed (I-808). */
+async function sha256Hex(payload: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(payload),
+  );
+  return [...new Uint8Array(digest)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
 
+/** Fleet pause state (I-403): present = paused; `until` optional. */
+interface PauseState {
+  until?: string;
+}
+
+const KEY_PAUSE = "hub:pause";
+const KEY_RULES = "hub:rules";
+const KEY_LEASE = "hub:leaseUsed";
+const PREFIX_PAIR = "pair:";
+const PREFIX_DEVICE = "device:";
+const PREFIX_PUSH = "push:";
+
+type TriageOutcome =
+  | {
+      ok: true;
+      commitAt?: number;
+      snoozedUntil?: number;
+      delegatedTo?: string;
+      approvalProgress?: { count: number; required: number };
+    }
+  | { ok: false; error: string };
 
 /**
  * Single Durable Object (instance name "global") owning all task state
@@ -87,6 +121,22 @@ export class TaskHub {
         return this.result(url);
       case "/state":
         return json(await this.snapshot());
+      case "/pause":
+        return this.pause(request);
+      case "/resume":
+        return this.resume();
+      case "/rules":
+        return this.rules(request);
+      case "/pair":
+        return this.pair(request);
+      case "/pair/redeem":
+        return this.redeem(request);
+      case "/auth":
+        return this.auth(request);
+      case "/push/subscribe":
+        return this.pushSubscribe(request);
+      case "/push/unsubscribe":
+        return this.pushUnsubscribe(request);
       default:
         return json({ error: "not_found" }, 404);
     }
@@ -121,17 +171,125 @@ export class TaskHub {
     if (existing && existing.status !== "processed") {
       return json({ error: "duplicate_task", taskId: task.taskId }, 409);
     }
+    const now = Date.now();
     const stored: StoredTask = {
       task,
       status: "pending",
       nonce: task.nonce,
-      createdAt: Date.now(),
+      createdAt: now,
     };
+
+    // I-304/I-807: an enabled, unexhausted rule auto-approves matching NEW
+    // cards. Only cards enqueued after the rule is stored are evaluated —
+    // the pending backlog is never swept. An auto-approved card never
+    // reaches the stack, so no createTaskCard is broadcast for it.
+    const rule = await this.matchingRule(stored.task, now);
+    if (rule) {
+      await this.state.storage.put(key, stored);
+      await this.bumpLeaseUsed(rule.id);
+      await this.autoApprove(key, stored, rule);
+      await this.rescheduleAlarm();
+      return json(
+        { ok: true, taskId: task.taskId, autoApproved: true, byRule: rule.id },
+        201,
+      );
+    }
+
     await this.state.storage.put(key, stored);
-    await this.broadcast("createTaskCard", this.present(stored, Date.now()));
+    await this.broadcast("createTaskCard", this.present(stored, now));
+    // Web Push (I-701): new cards only — never on update/rebroadcast.
+    this.state.waitUntil(this.notifySubscribers(stored.task));
     // A deadline on the new card may be earlier than anything pending.
     await this.rescheduleAlarm();
     return json({ ok: true, taskId: task.taskId }, 201);
+  }
+
+  /** First enabled rule whose `match` accepts this card and whose lease
+   *  still has budget (I-304/I-602/I-807). */
+  private async matchingRule(
+    task: TaskCardPayload,
+    now: number,
+  ): Promise<Rule | undefined> {
+    const rules = await this.getRules();
+    if (rules.length === 0) return undefined;
+    const used = await this.getLeaseUsed();
+    return rules.find(
+      (rule) =>
+        ruleMatches(rule, task, now) &&
+        (rule.lease?.maxCount === undefined ||
+          (used[rule.id] ?? 0) < rule.lease.maxCount),
+    );
+  }
+
+  private async bumpLeaseUsed(ruleId: string): Promise<void> {
+    const used = await this.getLeaseUsed();
+    used[ruleId] = (used[ruleId] ?? 0) + 1;
+    await this.state.storage.put(KEY_LEASE, used);
+  }
+
+  /** Auto-approval goes through the normal commit record + delivery
+   *  (grace 0): recorded as an outcome with `source: "auto_rule"` and
+   *  forwarded to `replyUrl` when set. */
+  private async autoApprove(
+    key: string,
+    stored: StoredTask,
+    rule: Rule,
+  ): Promise<void> {
+    const now = Date.now();
+    const reply: ActionReply = {
+      taskId: stored.task.taskId,
+      nonce: stored.nonce,
+      actionName: "approve",
+      timestamp: new Date(now).toISOString(),
+      source: "auto_rule",
+      data: { byRule: rule.id },
+    };
+    const updated: StoredTask = {
+      ...stored,
+      status: "processed",
+      processedAt: now,
+      processedBy: "auto_rule",
+      outcome: {
+        name: "approve",
+        data: { byRule: rule.id },
+        source: "auto_rule",
+        at: reply.timestamp,
+      },
+    };
+    await this.state.storage.put(key, updated);
+    await this.broadcast("dismissTask", {
+      taskId: stored.task.taskId,
+      by: "auto_rule",
+    });
+    if (stored.task.replyUrl) {
+      this.state.waitUntil(this.attemptDelivery(key, stored.task.replyUrl, reply));
+    }
+  }
+
+  /** Best-effort fan-out to every subscribed browser (I-701). Dead
+   *  subscriptions (404/410) are pruned on the spot. */
+  private async notifySubscribers(task: TaskCardPayload): Promise<void> {
+    try {
+      const subs = await this.state.storage.list<PushSubscription>({
+        prefix: PREFIX_PUSH,
+      });
+      if (subs.size === 0) return;
+      const payload = {
+        title: "AgentDesk",
+        body: task.summary,
+        taskId: task.taskId,
+      };
+      for (const [subKey, sub] of subs) {
+        try {
+          const result = await sendWebPush(this.env, sub, payload);
+          if (result === "gone") await this.state.storage.delete(subKey);
+        } catch (err) {
+          console.error(`web push to ${sub.endpoint} failed:`, err);
+        }
+      }
+    } catch (err) {
+      console.error("web push fan-out failed:", err);
+    }
   }
 
   /** Single accepted triage, shared by `/action` and `/bulk`. Returns a
@@ -161,14 +319,74 @@ export class TaskHub {
       return { ok: true, snoozedUntil: until };
     }
 
+    // Delegation (I-501): the card stays pending under a new owner
+    // (`task.delegatedTo`) and keeps its nonce — it still needs a real
+    // decision. Both the revised card and a `delegateTask` event go out.
+    if (decision.kind === "delegate") {
+      const to = reply.data === undefined ? undefined : reply.data.to;
+      if (typeof to !== "string" || to.length === 0) {
+        return { ok: false, error: "invalid_to" };
+      }
+      const delegated: StoredTask = {
+        ...stored,
+        task: { ...stored.task, delegatedTo: to },
+      };
+      await this.state.storage.put(key, delegated);
+      await this.broadcast("createTaskCard", {
+        ...this.present(delegated, Date.now()),
+        revised: true,
+      });
+      await this.broadcast("delegateTask", { taskId: reply.taskId, to });
+      return { ok: true, delegatedTo: to };
+    }
+
+    // Multi-party approval (I-502): the Nth approval is not in yet, so
+    // the card stays pending. Record this one, rotate the nonce so the
+    // same device cannot approve twice, and broadcast progress.
+    if (decision.kind === "approve_partial") {
+      const approval: Approval = {
+        source: reply.source,
+        at: reply.timestamp,
+      };
+      const approvals = [...(stored.approvals ?? []), approval];
+      const required = stored.task.requiredApprovals ?? 1;
+      const nonce = `tok_${crypto.randomUUID()}`;
+      const updated: StoredTask = {
+        ...stored,
+        task: { ...stored.task, nonce },
+        nonce,
+        approvals,
+      };
+      await this.state.storage.put(key, updated);
+      await this.broadcast("createTaskCard", this.present(updated, Date.now()));
+      await this.broadcast("approvalProgress", {
+        taskId: reply.taskId,
+        count: approvals.length,
+        required,
+      });
+      return {
+        ok: true,
+        approvalProgress: { count: approvals.length, required },
+      };
+    }
+
     // Undo grace (I-104): the card is dismissed on every device now, but
     // the reply only reaches replyUrl once the commit alarm fires.
     const commitAt = Date.now() + this.graceMs;
+    // A final (Nth) multi-party approval lands on the normal commit
+    // path; record it so the approvals trail stays complete.
+    const finalApproval =
+      reply.actionName === "approve" && (stored.task.requiredApprovals ?? 1) > 1
+        ? [{ source: reply.source, at: reply.timestamp }]
+        : [];
     const updated: StoredTask = {
       ...stored,
       status: "committing",
       commitAt,
       pendingReply: reply,
+      ...(finalApproval.length > 0
+        ? { approvals: [...(stored.approvals ?? []), ...finalApproval] }
+        : {}),
     };
     await this.state.storage.put(key, updated);
     await this.broadcast("dismissTask", {
@@ -182,11 +400,12 @@ export class TaskHub {
     const reply = (await request.json()) as ActionReply;
     const outcome = await this.applyTriage(reply);
     if (!outcome.ok) {
-      const status = outcome.error === "task_not_found"
-        ? 404
-        : outcome.error === "invalid_until"
-          ? 400
-          : 409;
+      const status =
+        outcome.error === "task_not_found"
+          ? 404
+          : outcome.error === "invalid_until" || outcome.error === "invalid_to"
+            ? 400
+            : 409;
       return json({ error: outcome.error, taskId: reply.taskId }, status);
     }
     await this.rescheduleAlarm();
@@ -196,6 +415,12 @@ export class TaskHub {
       ...(outcome.commitAt !== undefined ? { commitAt: outcome.commitAt } : {}),
       ...(outcome.snoozedUntil !== undefined
         ? { snoozedUntil: new Date(outcome.snoozedUntil).toISOString() }
+        : {}),
+      ...(outcome.delegatedTo !== undefined
+        ? { delegatedTo: outcome.delegatedTo }
+        : {}),
+      ...(outcome.approvalProgress !== undefined
+        ? { approvalProgress: outcome.approvalProgress }
         : {}),
     });
   }
@@ -208,6 +433,7 @@ export class TaskHub {
         nonce: string;
         actionName: string;
         source: string;
+        action?: "delegate";
         data?: Record<string, unknown>;
       }>;
     };
@@ -219,11 +445,22 @@ export class TaskHub {
         actionName: item.actionName,
         timestamp: new Date().toISOString(),
         source: item.source,
+        ...(item.action === "delegate" ? { action: "delegate" as const } : {}),
         ...(item.data ? { data: item.data } : {}),
       });
       results.push(
         outcome.ok
-          ? { taskId: item.taskId, ok: true, ...(outcome.commitAt !== undefined ? { commitAt: outcome.commitAt } : {}) }
+          ? {
+              taskId: item.taskId,
+              ok: true,
+              ...(outcome.commitAt !== undefined ? { commitAt: outcome.commitAt } : {}),
+              ...(outcome.delegatedTo !== undefined
+                ? { delegatedTo: outcome.delegatedTo }
+                : {}),
+              ...(outcome.approvalProgress !== undefined
+                ? { approvalProgress: outcome.approvalProgress }
+                : {}),
+            }
           : { taskId: item.taskId, error: outcome.error },
       );
     }
@@ -417,6 +654,7 @@ export class TaskHub {
     const tasks = this.orderedPending([...all.values()], now);
     const snoozed: SnapshotPayload["snoozed"] = [];
     const delivery: SnapshotPayload["delivery"] = [];
+    const approvalProgress: SnapshotPayload["approvalProgress"] = {};
     for (const stored of all.values()) {
       if (
         stored.status === "pending" &&
@@ -437,12 +675,22 @@ export class TaskHub {
           attempts: stored.delivery.attempts,
         });
       }
+      if (
+        stored.status === "pending" &&
+        stored.approvals !== undefined &&
+        stored.approvals.length > 0
+      ) {
+        approvalProgress[stored.task.taskId] = stored.approvals.length;
+      }
     }
     return {
       protocolVersion: PROTOCOL_VERSION,
       tasks: tasks.map((t) => this.present(t, now)),
       snoozed,
       delivery,
+      paused: await this.isPaused(now),
+      rules: await this.getRules(),
+      approvalProgress,
     };
   }
 
@@ -460,6 +708,207 @@ export class TaskHub {
           computePriority(a.task, a.createdAt, now);
         return diff !== 0 ? diff : a.createdAt - b.createdAt;
       });
+  }
+
+  private async getRules(): Promise<Rule[]> {
+    return (await this.state.storage.get<Rule[]>(KEY_RULES)) ?? [];
+  }
+
+  private async getLeaseUsed(): Promise<Record<string, number>> {
+    return (await this.state.storage.get<Record<string, number>>(KEY_LEASE)) ?? {};
+  }
+
+  /** Fleet pause flag (I-403). `until` in the past counts as resumed. */
+  private async isPaused(now: number): Promise<boolean> {
+    const pause = await this.state.storage.get<PauseState>(KEY_PAUSE);
+    if (!pause) return false;
+    if (pause.until === undefined) return true;
+    const at = Date.parse(pause.until);
+    return Number.isFinite(at) && at > now;
+  }
+
+  /**
+   * Operator pause (I-403): advisory only. New enqueues are still
+   * accepted; the pause travels to agents via `pauseState` (SSE), the
+   * snapshot `paused` flag and the long-poll result — SDKs are expected
+   * to stop starting new work while paused (docs/protocol.md).
+   */
+  private async pause(request: Request): Promise<Response> {
+    let body: unknown = {};
+    try {
+      body = await request.json();
+    } catch {
+      body = {};
+    }
+    let until: string | undefined;
+    if (
+      typeof body === "object" &&
+      body !== null &&
+      (body as Record<string, unknown>).until !== undefined
+    ) {
+      const raw = (body as Record<string, unknown>).until;
+      if (typeof raw !== "string" || !Number.isFinite(Date.parse(raw))) {
+        return json({ error: "invalid_until" }, 400);
+      }
+      until = raw;
+    }
+    await this.state.storage.put<PauseState>(
+      KEY_PAUSE,
+      until !== undefined ? { until } : {},
+    );
+    const event = {
+      paused: true,
+      ...(until !== undefined ? { until } : {}),
+    };
+    await this.broadcast("pauseState", event);
+    return json({ ok: true, ...event });
+  }
+
+  /** Operator resume (I-403). */
+  private async resume(): Promise<Response> {
+    await this.state.storage.delete(KEY_PAUSE);
+    await this.broadcast("pauseState", { paused: false });
+    return json({ ok: true, paused: false });
+  }
+
+  /** Auto-approval rule store (I-304/I-602/I-807). PUT replaces the whole
+   *  rule set; the new rules apply to cards enqueued from this moment —
+   *  the pending backlog is never swept. */
+  private async rules(request: Request): Promise<Response> {
+    if (request.method === "GET") {
+      return json({ rules: await this.getRules() });
+    }
+    if (request.method === "PUT") {
+      const parsed = validateRules(await request.json());
+      if (!parsed.ok) {
+        return json({ error: "invalid_payload", detail: parsed.error }, 400);
+      }
+      await this.state.storage.put(KEY_RULES, parsed.value);
+      await this.broadcast("ruleChanged", { rules: parsed.value });
+      return json({ ok: true, rules: parsed.value });
+    }
+    return json({ error: "method_not_allowed" }, 405);
+  }
+
+  /**
+   * QR-less pairing step 1 (I-808): mint a one-time 6-char code (5 min
+   * TTL). The redeeming client proves possession of the code, so the
+   * Worker adds the pairing URL — the DO only sees `task-hub` URLs.
+   */
+  private async pair(request: Request): Promise<Response> {
+    let body: unknown = {};
+    try {
+      body = await request.json();
+    } catch {
+      body = {};
+    }
+    const parsed = validatePairRequest(body);
+    if (!parsed.ok) {
+      return json({ error: "invalid_payload", detail: parsed.error }, 400);
+    }
+    const code = this.newPairCode();
+    const record: PairCode = {
+      user: parsed.value.user ?? "default",
+      ...(parsed.value.device !== undefined
+        ? { device: parsed.value.device }
+        : {}),
+      expiresAt: Date.now() + PAIR_TTL_MS,
+    };
+    await this.state.storage.put<PairCode>(PREFIX_PAIR + code, record);
+    return json({
+      code,
+      expiresAt: new Date(record.expiresAt).toISOString(),
+    });
+  }
+
+  /** One-time 6-char pairing code (no ambiguous glyphs). */
+  private newPairCode(): string {
+    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    return [...crypto.getRandomValues(new Uint8Array(6))]
+      .map((b) => alphabet[b % alphabet.length])
+      .join("");
+  }
+
+  /**
+   * Pairing step 2 (I-808): unauthenticated — possession of the code IS
+   * the credential. Redeems once into a `dev_…` device token bound to
+   * the code's user; the token is stored hashed.
+   */
+  private async redeem(request: Request): Promise<Response> {
+    const parsed = validateRedeemRequest(await request.json());
+    if (!parsed.ok) {
+      return json({ error: "invalid_payload", detail: parsed.error }, 400);
+    }
+    const key = PREFIX_PAIR + parsed.value.code.toUpperCase();
+    const record = await this.state.storage.get<PairCode>(key);
+    if (!record || record.expiresAt <= Date.now()) {
+      return json({ error: "invalid_code" }, 404);
+    }
+    await this.state.storage.delete(key);
+    const token = `dev_${crypto.randomUUID()}`;
+    const record2: DeviceRecord = {
+      user: record.user,
+      createdAt: new Date().toISOString(),
+    };
+    await this.state.storage.put<DeviceRecord>(
+      PREFIX_DEVICE + (await sha256Hex(token)),
+      record2,
+    );
+    return json({ token, user: record.user });
+  }
+
+  /** Device-token lookup for the router (I-808/I-809). */
+  private async auth(request: Request): Promise<Response> {
+    const body = (await request.json()) as { token?: unknown };
+    const token = body.token;
+    if (typeof token !== "string" || token.length === 0) {
+      return json({ error: "invalid_token" }, 400);
+    }
+    const record = await this.state.storage.get<DeviceRecord>(
+      PREFIX_DEVICE + (await sha256Hex(token)),
+    );
+    if (!record) return json({ error: "invalid_token" }, 404);
+    return json({ user: record.user });
+  }
+
+  /** Register a browser push subscription (I-701). */
+  private async pushSubscribe(request: Request): Promise<Response> {
+    const body = (await request.json()) as Partial<PushSubscription>;
+    if (
+      typeof body?.endpoint !== "string" ||
+      !/^https:\/\//.test(body.endpoint) ||
+      typeof body.keys?.p256dh !== "string" ||
+      typeof body.keys?.auth !== "string"
+    ) {
+      return json(
+        {
+          error: "invalid_payload",
+          detail: "endpoint (https URL) and keys.p256dh / keys.auth are required",
+        },
+        400,
+      );
+    }
+    await this.state.storage.put<PushSubscription>(
+      PREFIX_PUSH + (await sha256Hex(body.endpoint)),
+      {
+        endpoint: body.endpoint,
+        keys: { p256dh: body.keys.p256dh, auth: body.keys.auth },
+      },
+    );
+    return json({ ok: true }, 201);
+  }
+
+  /** Remove a browser push subscription (I-701). */
+  private async pushUnsubscribe(request: Request): Promise<Response> {
+    const body = (await request.json()) as { endpoint?: unknown };
+    if (typeof body?.endpoint !== "string") {
+      return json(
+        { error: "invalid_payload", detail: "endpoint is required" },
+        400,
+      );
+    }
+    await this.state.storage.delete(PREFIX_PUSH + (await sha256Hex(body.endpoint)));
+    return new Response(null, { status: 204 });
   }
 
   /** POST the reply to `replyUrl` with an HMAC signature (I-604/I-801).
@@ -534,7 +983,8 @@ export class TaskHub {
   }
 
   private get graceMs(): number {
-    return parseGraceMs(this.env.UNDO_GRACE_MS);
+    const parsed = Number.parseInt(this.env.UNDO_GRACE_MS ?? "", 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : UNDO_GRACE_MS;
   }
 
   private async broadcast(event: string, data: unknown): Promise<void> {
@@ -614,11 +1064,15 @@ export class TaskHub {
       if (Number.isFinite(at) && (next === null || at < next)) next = at;
     }
     const current = await this.state.storage.getAlarm();
+
     if (next === null) {
       if (current !== null) await this.state.storage.deleteAlarm();
       return;
     }
-    if (current === null || next < current) {
+    // Self-heal a stale alarm: after a runtime restart the stored alarm
+    // can sit in the past while its timer is gone — a future `next`
+    // would otherwise never schedule (next < current is false forever).
+    if (current === null || next < current || current <= now) {
       await this.state.storage.setAlarm(next);
     }
   }

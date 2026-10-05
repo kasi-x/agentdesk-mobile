@@ -70,8 +70,18 @@ export interface TaskCardActions {
   onSwipeRight?: ActionBinding;
   onSwipeLeft?: ActionBinding;
   onSwipeUp?: ActionBinding;
+  /** Fourth swipe direction, used by `decisionKind: "choose"` cards
+   *  (I-111): up/down pick between `choices`. Approve cards keep
+   *  down = snooze client-side. */
+  onSwipeDown?: ActionBinding;
   inspectForm?: CardComponent[];
   rejectReasons?: RejectReason[];
+}
+
+/** One option of a `decisionKind: "choose"` card (I-111). */
+export interface Choice {
+  id: string;
+  label: string;
 }
 
 /** What kind of decision the card asks for; `approve` when absent. */
@@ -91,6 +101,65 @@ export interface EditableHint {
   min?: number;
   max?: number;
   step?: number;
+}
+
+/** What a rule matches against a NEW pending card (I-304/I-807). All
+ *  constraints are ANDed; an omitted constraint matches anything. */
+export interface RuleMatch {
+  /** Substring of `agent.name`. */
+  agent?: string;
+  /** Allowed `severity` values (empty/absent = any). */
+  severity?: string[];
+  /** Maximum `impact.cost.amount`; a card without a cost counts as 0. */
+  maxCost?: number;
+  /** Substring of `groupKey`. */
+  groupKey?: string;
+}
+
+/** A rule's self-limiting budget (I-602). The rule stops auto-approving
+ *  once `until` passes or `maxCount` approvals have been spent. */
+export interface RuleLease {
+  /** ISO 8601 instant after which the rule is disabled. */
+  until?: string;
+  /** Maximum number of auto-approvals while `until` has not passed. */
+  maxCount?: number;
+}
+
+/** An auto-approval rule (I-304/I-807): matching NEW pending cards are
+ *  approved by the hub with `source: "auto_rule"`, counting against the
+ *  lease. Stored in the hub and managed via `GET/PUT /api/v1/rules`. */
+export interface Rule {
+  id: string;
+  match: RuleMatch;
+  lease?: RuleLease;
+  enabled: boolean;
+}
+
+/** True when this rule is currently allowed to fire for `task` at `now`,
+ *  ignoring the lease count (which the hub tracks in `leaseUsed`). */
+export function ruleMatches(rule: Rule, task: TaskCardPayload, now: number): boolean {
+  if (!rule.enabled) return false;
+  const until = rule.lease?.until;
+  if (until !== undefined) {
+    const at = Date.parse(until);
+    if (!Number.isFinite(at) || at <= now) return false;
+  }
+  const m = rule.match;
+  if (m.agent !== undefined && !task.agent.name.includes(m.agent)) return false;
+  if (
+    m.severity !== undefined &&
+    m.severity.length > 0 &&
+    !m.severity.includes(task.severity ?? "info")
+  ) {
+    return false;
+  }
+  if (m.groupKey !== undefined && !(task.groupKey ?? "").includes(m.groupKey)) {
+    return false;
+  }
+  if (m.maxCost !== undefined && (task.impact?.cost?.amount ?? 0) > m.maxCost) {
+    return false;
+  }
+  return true;
 }
 
 
@@ -126,6 +195,15 @@ export interface TaskCardPayload {
   decisionKind?: DecisionKind;
   /** Inline value editing hint (I-114). */
   editable?: EditableHint;
+  /** Multi-party approval (I-502): this many distinct approvals are
+   *  required before the card commits. Absent = 1. Integer ≥ 1. */
+  requiredApprovals?: number;
+  /** Options for `decisionKind: "choose"` (I-111); at least two, each
+   *  `{id, label}`. Frozen on the card so the reply can echo `id`. */
+  choices?: Choice[];
+  /** Hub-set: the colleague this card was delegated to (I-501). Set by
+   *  an `action: "delegate"` reply; never sent by agents. */
+  delegatedTo?: string;
   /** Hub-computed urgency score (I-206); higher = more urgent. Never
    *  sent by agents — attached by the hub on broadcast/snapshot. */
   priority?: number;
@@ -142,8 +220,9 @@ export interface ActionReply {
   source: string;
   data?: Record<string, unknown>;
   /** `"snooze"` asks the hub to hide the card until `until` instead of
-   *  processing it (server-side snooze). */
-  action?: "snooze";
+   *  processing it (server-side snooze); `"delegate"` hands the card to
+   *  a colleague (`data.to`) without deciding it (I-501). */
+  action?: "snooze" | "delegate";
   /** ISO 8601 instant the snoozed card resurfaces; required with
    *  `action: "snooze"`, at most 7 days out. */
   until?: string;
@@ -188,6 +267,16 @@ export interface StoredTask {
   /** Terminal decision recorded for `GET /result` (I-901): what was
    *  decided, by which source, and when. */
   outcome?: Outcome;
+  /** Partial approvals so far for a `requiredApprovals > 1` card
+   *  (I-502). The card stays `pending` until `approvals.length` reaches
+   *  `task.requiredApprovals`. */
+  approvals?: Approval[];
+}
+
+/** One recorded approval on a multi-party card (I-502). */
+export interface Approval {
+  source: string;
+  at: string;
 }
 
 /** replyUrl delivery state (I-604/I-801). `url`/`reply` are retained so
@@ -219,11 +308,21 @@ export interface SnapshotPayload {
   snoozed: { taskId: string; until: string }[];
   /** Terminal replyUrl failures (I-604) awaiting operator attention. */
   delivery: { taskId: string; lastError?: string; attempts: number }[];
+  /** True while the operator has paused the fleet (I-403). Advisory:
+   *  agents SHOULD stop starting new work (see docs/protocol.md). */
+  paused: boolean;
+  /** Current auto-approval rules (I-304/I-807). */
+  rules: Rule[];
+  /** Partial-approval progress for `requiredApprovals > 1` cards, keyed
+   *  by taskId → approvals recorded so far (I-502). */
+  approvalProgress: Record<string, number>;
 }
 
 export type ActionDecision =
   | { kind: "apply" }
   | { kind: "snooze" }
+  | { kind: "delegate" }
+  | { kind: "approve_partial" }
   | { kind: "conflict"; reason: "already_processed" }
   | { kind: "not_found" }
   | { kind: "bad_nonce" };
@@ -254,6 +353,17 @@ export function decideAction(
   // still-pending card; it keeps the nonce (rotation happens when the
   // alarm resurfaces the card).
   if (reply.action === "snooze") return { kind: "snooze" };
+  // Delegation (I-501): hand the card to a colleague without deciding it;
+  // the card stays pending (and keeps its nonce).
+  if (reply.action === "delegate") return { kind: "delegate" };
+  // Multi-party approval (I-502): an approve on a card that needs more
+  // than one distinct approval records a partial until the Nth arrives.
+  if (reply.actionName === "approve") {
+    const required = stored.task.requiredApprovals ?? 1;
+    if (required > 1 && (stored.approvals?.length ?? 0) + 1 < required) {
+      return { kind: "approve_partial" };
+    }
+  }
   return { kind: "apply" };
 }
 
@@ -434,7 +544,12 @@ export function validateTaskCard(
   const rawActions = body.actions;
   if (rawActions !== undefined) {
     if (!isRecord(rawActions)) return fail("actions must be an object");
-    for (const key of ["onSwipeRight", "onSwipeLeft", "onSwipeUp"] as const) {
+    for (const key of [
+      "onSwipeRight",
+      "onSwipeLeft",
+      "onSwipeUp",
+      "onSwipeDown",
+    ] as const) {
       const binding = rawActions[key];
       if (binding === undefined) continue;
       if (!isRecord(binding) || typeof binding.actionName !== "string") {
@@ -624,6 +739,56 @@ export function validateTaskCard(
     };
   }
 
+  // I-502: multi-party approval count (absent = 1).
+  let requiredApprovals: number | undefined;
+  if (body.requiredApprovals !== undefined) {
+    const raw = body.requiredApprovals;
+    if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1) {
+      return fail("requiredApprovals must be an integer >= 1");
+    }
+    requiredApprovals = raw;
+  }
+
+  // I-111: choose options. `decisionKind: "choose"` cards must offer at
+  // least two and declare both up/down swipe bindings; the reply echoes
+  // the picked option back as `data.choice = id`.
+  let choices: Choice[] | undefined;
+  if (body.choices !== undefined) {
+    if (!Array.isArray(body.choices)) return fail("choices must be an array");
+    const kept: Choice[] = [];
+    for (const c of body.choices) {
+      if (
+        !isRecord(c) ||
+        typeof c.id !== "string" ||
+        c.id.length === 0 ||
+        typeof c.label !== "string" ||
+        c.label.length === 0
+      ) {
+        return fail("every choice needs non-empty string id and label");
+      }
+      kept.push({ id: c.id, label: c.label });
+    }
+    choices = kept;
+  }
+  if (
+    decisionKind === "choose" &&
+    ((choices?.length ?? 0) < 2 || !actions.onSwipeUp || !actions.onSwipeDown)
+  ) {
+    return fail(
+      'decisionKind "choose" requires >= 2 choices and both onSwipeUp / onSwipeDown bindings',
+    );
+  }
+
+  // Hub-set delegation target (I-501). Agents never send it; accepted so
+  // an update round-trips the current value.
+  let delegatedTo: string | undefined;
+  if (body.delegatedTo !== undefined) {
+    if (typeof body.delegatedTo !== "string" || body.delegatedTo.length === 0) {
+      return fail("delegatedTo must be a non-empty string");
+    }
+    delegatedTo = body.delegatedTo;
+  }
+
   const replyUrl = body.replyUrl;
   if (replyUrl !== undefined) {
     if (typeof replyUrl !== "string" || !/^https?:\/\//.test(replyUrl)) {
@@ -700,6 +865,9 @@ export function validateTaskCard(
     ...(groupKey !== undefined ? { groupKey } : {}),
     ...(decisionKind !== undefined ? { decisionKind } : {}),
     ...(editable !== undefined ? { editable } : {}),
+    ...(requiredApprovals !== undefined ? { requiredApprovals } : {}),
+    ...(choices !== undefined ? { choices } : {}),
+    ...(delegatedTo !== undefined ? { delegatedTo } : {}),
   };
   return { ok: true, value };
 }
@@ -725,8 +893,12 @@ export function validateActionReply(
     return fail("nonce (string) is required");
   }
 
-  if (body.action !== undefined && body.action !== "snooze") {
-    return fail('action must be "snooze" when present');
+  if (
+    body.action !== undefined &&
+    body.action !== "snooze" &&
+    body.action !== "delegate"
+  ) {
+    return fail('action must be "snooze" or "delegate" when present');
   }
   if (body.action === "snooze") {
     const until = body.until;
@@ -756,6 +928,28 @@ export function validateActionReply(
     };
   }
 
+  if (body.action === "delegate") {
+    const to = isRecord(body.data) ? body.data.to : undefined;
+    if (typeof to !== "string" || to.length === 0) {
+      return fail("delegate requires data.to (non-empty string)");
+    }
+    return {
+      ok: true,
+      value: {
+        taskId,
+        nonce,
+        actionName: "delegate",
+        timestamp:
+          typeof body.timestamp === "string"
+            ? body.timestamp
+            : new Date().toISOString(),
+        source: typeof body.source === "string" ? body.source : "delegate",
+        action: "delegate",
+        data: body.data as Record<string, unknown>,
+      },
+    };
+  }
+
   if (typeof actionName !== "string" || actionName.length === 0) {
     return fail("actionName (string) is required");
   }
@@ -781,6 +975,8 @@ export interface BulkActionItem {
   nonce: string;
   actionName: string;
   source: string;
+  /** Present only for `delegate` items (I-501). */
+  action?: "delegate";
   data?: Record<string, unknown>;
 }
 
@@ -812,6 +1008,21 @@ export function validateBulkRequest(
     if (typeof action !== "string" || action.length === 0) {
       return fail("every action needs a string action");
     }
+    if (action === "delegate") {
+      const to = isRecord(item.data) ? item.data.to : undefined;
+      if (typeof to !== "string" || to.length === 0) {
+        return fail("delegate requires data.to (non-empty string)");
+      }
+      actions.push({
+        taskId,
+        nonce,
+        actionName: "delegate",
+        source: typeof source === "string" ? source : "bulk",
+        action: "delegate",
+        data: item.data as Record<string, unknown>,
+      });
+      continue;
+    }
     actions.push({
       taskId,
       nonce,
@@ -821,4 +1032,138 @@ export function validateBulkRequest(
     });
   }
   return { ok: true, value: { actions } };
+}
+
+/**
+ * Validates a `PUT /api/v1/rules` body `{rules:[…]}` (I-304/I-807). Each
+ * rule is normalized strictly — a malformed rule would silently widen an
+ * auto-approval policy, so it is rejected rather than dropped.
+ */
+export function validateRules(body: unknown): ValidationResult<Rule[]> {
+  if (!isRecord(body)) return fail("payload must be a JSON object");
+  const raw = body.rules;
+  if (!Array.isArray(raw)) return fail("rules must be an array");
+  const rules: Rule[] = [];
+  for (const item of raw) {
+    if (!isRecord(item)) return fail("every rule must be an object");
+    const id = item.id;
+    if (typeof id !== "string" || id.length === 0) {
+      return fail("every rule needs a non-empty string id");
+    }
+
+    const match: RuleMatch = {};
+    if (item.match !== undefined) {
+      if (!isRecord(item.match)) return fail("rule.match must be an object");
+      const m = item.match;
+      if (m.agent !== undefined) {
+        if (typeof m.agent !== "string") {
+          return fail("rule.match.agent must be a string");
+        }
+        match.agent = m.agent;
+      }
+      if (m.severity !== undefined) {
+        if (!Array.isArray(m.severity) || m.severity.some((s) => typeof s !== "string")) {
+          return fail("rule.match.severity must be an array of strings");
+        }
+        match.severity = m.severity as string[];
+      }
+      if (m.maxCost !== undefined) {
+        if (typeof m.maxCost !== "number" || !Number.isFinite(m.maxCost)) {
+          return fail("rule.match.maxCost must be a number");
+        }
+        match.maxCost = m.maxCost;
+      }
+      if (m.groupKey !== undefined) {
+        if (typeof m.groupKey !== "string") {
+          return fail("rule.match.groupKey must be a string");
+        }
+        match.groupKey = m.groupKey;
+      }
+    }
+
+    let lease: RuleLease | undefined;
+    if (item.lease !== undefined) {
+      if (!isRecord(item.lease)) return fail("rule.lease must be an object");
+      const l = item.lease;
+      lease = {};
+      if (l.until !== undefined) {
+        if (typeof l.until !== "string" || !Number.isFinite(Date.parse(l.until))) {
+          return fail("rule.lease.until must be an ISO 8601 date string");
+        }
+        lease.until = l.until;
+      }
+      if (l.maxCount !== undefined) {
+        if (typeof l.maxCount !== "number" || !Number.isInteger(l.maxCount) || l.maxCount < 1) {
+          return fail("rule.lease.maxCount must be an integer >= 1");
+        }
+        lease.maxCount = l.maxCount;
+      }
+    }
+
+    const enabled = item.enabled === undefined ? true : item.enabled;
+    if (typeof enabled !== "boolean") {
+      return fail("rule.enabled must be a boolean");
+    }
+    rules.push({
+      id,
+      match,
+      ...(lease !== undefined ? { lease } : {}),
+      enabled,
+    });
+  }
+  return { ok: true, value: rules };
+}
+
+/** One-time pairing code TTL (I-808). */
+export const PAIR_TTL_MS = 5 * 60 * 1000;
+
+/** `POST /api/v1/pair` body (I-808): both fields optional. */
+export interface PairRequest {
+  device?: string;
+  user?: string;
+}
+
+/** Stored pairing challenge (`pair:<code>`). */
+export interface PairCode {
+  user: string;
+  device?: string;
+  expiresAt: number;
+}
+
+/** Stored device-token record (`device:<sha256>`), I-808/I-809. */
+export interface DeviceRecord {
+  user: string;
+  createdAt: string;
+}
+
+export function validatePairRequest(
+  body: unknown,
+): ValidationResult<PairRequest> {
+  if (body === undefined || body === null) return { ok: true, value: {} };
+  if (!isRecord(body)) return fail("payload must be a JSON object");
+  const out: PairRequest = {};
+  if (body.device !== undefined) {
+    if (typeof body.device !== "string" || body.device.length === 0) {
+      return fail("device must be a non-empty string");
+    }
+    out.device = body.device;
+  }
+  if (body.user !== undefined) {
+    if (typeof body.user !== "string" || body.user.length === 0) {
+      return fail("user must be a non-empty string");
+    }
+    out.user = body.user;
+  }
+  return { ok: true, value: out };
+}
+
+export function validateRedeemRequest(
+  body: unknown,
+): ValidationResult<{ code: string }> {
+  if (!isRecord(body)) return fail("payload must be a JSON object");
+  const code = body.code;
+  if (typeof code !== "string" || code.length === 0) {
+    return fail("code (string) is required");
+  }
+  return { ok: true, value: { code } };
 }

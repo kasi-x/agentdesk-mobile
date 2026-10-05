@@ -67,4 +67,10 @@ abstract final class ActionSource {
   static const String twoStageSwipe = 'two_stage_swipe';
   /// Bundled approval via `POST /api/v1/actions/bulk` (I-201).
   static const String bulk = 'bulk';
+  /// Delegation to a colleague (`action: "delegate"`, I-501).
+  static const String delegate = 'delegate';
+  /// Hub auto-approval via a rule (`source: "auto_rule"`, I-304/I-807).
+  static const String autoRule = 'auto_rule';
+  /// Operator fleet pause (I-403).
+  static const String pause = 'pause';
 }

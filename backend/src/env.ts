@@ -14,4 +14,12 @@ export interface Env {
   /** HMAC key for replyUrl signatures (I-801); falls back to
    *  `AGENT_TOKEN` when unset. */
   REPLY_SIGNING_SECRET?: string;
+  /** Web Push / VAPID (I-701). All optional: when the key pair is unset
+   *  the hub skips push delivery silently. `VAPID_PRIVATE_KEY` is the
+   *  base64url-encoded P-256 private key (or a base64url JWK);
+   *  `VAPID_PUBLIC_KEY` is the base64url uncompressed public key. */
+  VAPID_PUBLIC_KEY?: string;
+  VAPID_PRIVATE_KEY?: string;
+  /** VAPID `sub` claim; defaults to "mailto:admin@localhost". */
+  VAPID_SUBJECT?: string;
 }

@@ -6,3 +6,10 @@ CLIENT_TOKEN=dev-client-token
 # ALLOWED_ORIGINS=http://localhost:3000
 # Optional undo grace window in ms (I-104, default 5000)
 # UNDO_GRACE_MS=5000
+# Optional Web Push / VAPID (I-701). When unset the hub skips push
+# delivery silently. Generate a P-256 pair and set all three; the public
+# key is base64url uncompressed (65 bytes), the private key the
+# base64url of a JWK (or of the raw 32-byte scalar).
+# VAPID_PUBLIC_KEY=
+# VAPID_PRIVATE_KEY=
+# VAPID_SUBJECT=mailto:admin@localhost

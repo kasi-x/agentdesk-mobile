@@ -214,4 +214,56 @@ void main() {
     expect(broken.priority, isNull);
     expect(broken.revised, isFalse);
   });
+
+  test('parses swipe up/down, requiredApprovals, choices and delegatedTo (I-111/I-501/I-502)', () {
+    final task = TaskCard.fromJson(<String, dynamic>{
+      ...reference,
+      'decisionKind': 'choose',
+      'requiredApprovals': 2,
+      'choices': [
+        {'id': 'a', 'label': 'A'},
+        {'id': 'b', 'label': 'B'},
+        {'id': '', 'label': 'dropped'},
+        'junk',
+      ],
+      'delegatedTo': 'alice',
+      'actions': {
+        ...reference['actions'] as Map<String, dynamic>,
+        'onSwipeUp': {'actionName': 'pick_first'},
+        'onSwipeDown': {'actionName': 'pick_second', 'label': 'Bにする'},
+      },
+    });
+    expect(task.onSwipeUp?.actionName, 'pick_first');
+    expect(task.onSwipeDown?.actionName, 'pick_second');
+    expect(task.onSwipeDown?.label, 'Bにする');
+    expect(task.requiredApprovals, 2);
+    expect(task.choices.map((c) => c.id).toList(), ['a', 'b']);
+    expect(task.delegatedTo, 'alice');
+
+    final restored = TaskCard.fromJson(task.toJson());
+    expect(restored.onSwipeUp?.actionName, 'pick_first');
+    expect(restored.onSwipeDown?.actionName, 'pick_second');
+    expect(restored.requiredApprovals, 2);
+    expect(restored.choices.map((c) => c.label).toList(), ['A', 'B']);
+    expect(restored.delegatedTo, 'alice');
+  });
+
+  test('defaults wave-2 fields and tolerates malformed ones', () {
+    final task = TaskCard.fromJson(reference);
+    expect(task.onSwipeUp, isNull);
+    expect(task.onSwipeDown, isNull);
+    expect(task.requiredApprovals, 1);
+    expect(task.choices, isEmpty);
+    expect(task.delegatedTo, isNull);
+
+    final broken = TaskCard.fromJson(<String, dynamic>{
+      ...reference,
+      'requiredApprovals': 0,
+      'choices': 'nope',
+      'delegatedTo': 7,
+    });
+    expect(broken.requiredApprovals, 1);
+    expect(broken.choices, isEmpty);
+    expect(broken.delegatedTo, isNull);
+  });
 }

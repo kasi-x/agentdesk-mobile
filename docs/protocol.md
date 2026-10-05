@@ -11,8 +11,9 @@ carry no field at all — the hub reads them as `1`, so old producers keep
 working unchanged. The `snapshot` event and `GET /state` envelope also
 carry `protocolVersion` so a client can detect a server it does not
 understand. Additive fields (`groupKey`, `decisionKind`, `editable`,
-`priority`, `revised`) do not bump the version; clients must tolerate
-unknown ones.
+`priority`, `revised`, `requiredApprovals`, `choices`, `delegatedTo`,
+`actions.onSwipeDown`, `paused`, `rules`, `approvalProgress`) do not bump
+the version; clients must tolerate unknown ones.
 
 Payloads are **pure data** (A2UI-style, flat adjacent list). Clients must
 treat every string as display-only text: no HTML, no JS, no WebView
@@ -28,25 +29,41 @@ treat every string as display-only text: no HTML, no JS, no WebView
 | POST | `/api/v1/tasks/{id}/withdraw` | Bearer `$AGENT_TOKEN` | agent | cancel a pending card everywhere (I-205) |
 | GET | `/api/v1/tasks/{id}/result?wait=<sec>` | Bearer `$AGENT_TOKEN` | agent | resolve the outcome, long-polling up to 60s (I-901) |
 | GET | `/api/v1/stream` | Bearer `$CLIENT_TOKEN` (or `?token=` for EventSource) | client | SSE event stream |
-| GET | `/api/v1/state` | Bearer `$CLIENT_TOKEN` | client | snapshot of pending tasks (cold-start priming, NFR-1.2) |
-| POST | `/api/v1/actions` | Bearer `$CLIENT_TOKEN` | client | deliver a triage decision or a snooze (7.2 payload) |
+| GET | `/api/v1/state` | Bearer `$CLIENT_TOKEN` | client | snapshot: tasks + snoozed + delivery + paused + rules + approvalProgress |
+| POST | `/api/v1/actions` | Bearer `$CLIENT_TOKEN` | client | triage decision, snooze, delegation or partial approval (7.2 payload) |
 | POST | `/api/v1/actions/bulk` | Bearer `$CLIENT_TOKEN` | client | deliver many triage decisions, each CASed independently (I-201) |
 | POST | `/api/v1/actions/undo` | Bearer `$CLIENT_TOKEN` | client | revert a decision still inside the undo grace window (I-104) |
+| POST | `/api/v1/pause` | Bearer `$CLIENT_TOKEN` | client | pause the fleet (I-403) |
+| POST | `/api/v1/resume` | Bearer `$CLIENT_TOKEN` | client | resume the fleet (I-403) |
+| GET/PUT | `/api/v1/rules` | Bearer `$CLIENT_TOKEN` | client | read / replace auto-approval rules (I-304/I-807) |
+| POST | `/api/v1/pair` | Bearer `$CLIENT_TOKEN` | client | mint a one-time pairing code (I-808) |
+| POST | `/api/v1/pair/redeem` | none (the code is the credential) | client | redeem a code into a device token (I-808) |
+| POST/DELETE | `/api/v1/push/subscribe` | Bearer `$CLIENT_TOKEN` | client | register / remove a Web Push subscription (I-701) |
+| GET | `/api/v1/push/vapid` | Bearer `$CLIENT_TOKEN` | client | VAPID public key for subscriptions (I-701) |
 | GET | `/healthz` | none | ops | liveness |
 
+Client auth accepts the shared `$CLIENT_TOKEN` **or any issued device
+token** (`dev_…`, I-808/I-809). A device token binds a `user` and routes
+that request to the per-user Durable Object (`user:<user>`);
+`$CLIENT_TOKEN` routes to the shared `global` DO. Unknown tokens → `401`.
+
 Errors: `401` bad/missing token · `400` invalid payload (message says why)
-· `404` `task_not_found` · `409` `already_processed` / `bad_nonce` /
-`duplicate_task` / `too_late`. CORS: `ALLOWED_ORIGINS` env
+· `404` `task_not_found` / `invalid_code` · `409` `already_processed` /
+`bad_nonce` / `duplicate_task` / `too_late`. CORS: `ALLOWED_ORIGINS` env
 (comma-separated, `*` for dev).
 
 ## SSE events (`GET /api/v1/stream`)
 
 ```
-event: snapshot        data: {"protocolVersion":1,"tasks":[TaskCard,...],"snoozed":[...],"delivery":[...]}
-event: createTaskCard  data: TaskCard   (a taskId the client already holds means: replace in place — I-203 escalate / I-204 update)
+event: snapshot        data: {"protocolVersion":1,"tasks":[TaskCard,...],"snoozed":[...],"delivery":[...],"paused":false,"rules":[...],"approvalProgress":{}}
+event: createTaskCard  data: TaskCard   (a taskId the client already holds means: replace in place — I-203 escalate / I-204 update / I-501 delegate / I-502 partial approval)
 event: dismissTask     data: {"taskId":"…","by":"swipe_gesture"}   (FR-3.2: remove from every device)
 event: withdrawTask    data: {"taskId":"…"}                        (I-205: the agent cancelled the card)
 event: deliveryFailed  data: {"taskId":"…","lastError":"HTTP 500"} (I-604: replyUrl retries exhausted)
+event: pauseState      data: {"paused":true,"until":"…"} / {"paused":false}   (I-403: fleet pause; `until` omitted = indefinite)
+event: delegateTask    data: {"taskId":"…","to":"alice"}           (I-501: the card moved to a colleague; the revised card also arrives as `createTaskCard`)
+event: approvalProgress data: {"taskId":"…","count":1,"required":2}  (I-502: a partial approval landed; the card keeps waiting)
+event: ruleChanged     data: {"rules":[…]}                         (I-807: the rule set was replaced)
 : ping                                                  (heartbeat comment every 15s)
 ```
 
@@ -58,10 +75,13 @@ event: deliveryFailed  data: {"taskId":"…","lastError":"HTTP 500"} (I-604: rep
 | `tasks` | pending, **non-snoozed** cards, ordered priority desc / createdAt asc (I-206) |
 | `snoozed` | `[{taskId, until}]` — hidden by a server-side snooze until `until` |
 | `delivery` | `[{taskId, lastError?, attempts}]` — terminal replyUrl failures (I-604) |
+| `paused` | fleet pause flag (I-403); advisory — agents SHOULD stop starting new work while true |
+| `rules` | current auto-approval rules (I-304/I-807) |
+| `approvalProgress` | `{taskId: count}` — partial approvals recorded so far for `requiredApprovals > 1` cards (I-502) |
 
 `dismissTask.by` is the action `source` (`swipe_gesture`, `web_ui`,
-`on_expire`, …) or the hub-side values `snooze` / `withdraw`; a snooze
-dismissal also carries `snoozedUntil` (ISO 8601).
+`on_expire`, `auto_rule`, …) or the hub-side values `snooze` / `withdraw`;
+a snooze dismissal also carries `snoozedUntil` (ISO 8601).
 
 Reconnect policy (client): exponential backoff 1s→30s; on reconnect the
 fresh `snapshot` reconciles the stack, so no Last-Event-ID replay is
@@ -70,8 +90,8 @@ needed in v1.
 ## TaskCard (hub ⇐ agent, hub ⇒ clients)
 
 Agents POST this to `/api/v1/tasks`. `taskId`, `nonce`, `createdAt` are
-filled in by the hub when absent; `priority` and `revised` are added by
-the hub (agents never send them).
+filled in by the hub when absent; `priority`, `revised` and (on
+delegation) `delegatedTo` are added by the hub (agents never send them).
 
 ```json
 {
@@ -144,16 +164,20 @@ Field notes:
 | `severity` | opt | `info` / `warning` / `critical` header badge |
 | `replyUrl` | opt | https URL; the hub POSTs the 7.2 reply here after a decision |
 | `components` | req | adjacent list; render order = `TriageCard.children`, else array order |
+| `actions.onSwipeDown` | opt | fourth swipe binding (I-111). Choose cards bind it to the second option; approve cards keep down = snooze client-side |
 | `actions.inspectForm` | opt | bottom-sheet form components (§3.3) |
 | `actions.rejectReasons` | opt | `[{id, label}]` reject reason chips (I-118). The chosen id arrives as `data.reason` on the reply; no choice = reject without a reason. Malformed entries are dropped, non-array is `400` |
 | `context` | opt | structured 裏面 (back-of-card) context for the details panel — see below |
 | `expiresAt` | opt | ISO 8601 deadline; the hub runs `onExpire` at it (I-203, see below) |
 | `onExpire` | opt | `approve` \| `reject` \| `escalate` \| `drop` (default `drop`); requires `expiresAt` |
 | `groupKey` | opt | non-empty string; cards sharing it are a bundle (I-201). Non-string/empty → `400` |
-| `decisionKind` | opt | `approve` \| `choose` \| `fill` (default `approve`); unknown value → `400` |
+| `decisionKind` | opt | `approve` \| `choose` \| `fill` (default `approve`); unknown value → `400`. `choose` requires `choices` ≥ 2 **and** both `actions.onSwipeUp` / `actions.onSwipeDown` |
 | `editable` | opt | `{componentId, kind: "number"\|"datetime", min?, max?, step?}` — inline value editing hint (I-114). `componentId` required; bad kinds/values → `400` |
+| `requiredApprovals` | opt | integer ≥ 1, default `1` (I-502). The card commits only after this many distinct approvals; anything else → `400` |
+| `choices` | opt | `[{id, label}]` options for `decisionKind: "choose"` (I-111). Each entry needs non-empty string `id` + `label`; otherwise `400` |
+| `delegatedTo` | hub adds | colleague the card was delegated to (I-501); agents never send it |
 | `priority` | hub adds | urgency score (higher = more urgent); never sent by agents — see below |
-| `revised` | hub adds | `true` on a `createTaskCard` re-broadcast after an agent update (I-204) |
+| `revised` | hub adds | `true` on a `createTaskCard` re-broadcast after an agent update (I-204) or a delegation (I-501) |
 
 ## Component catalog
 
@@ -195,7 +219,9 @@ component, merges the `onSwipeRight.payload` underneath, and sends
 `source` ∈ `swipe_gesture` | `quick_chip` | `inspect_form` |
 `lock_screen` (Phase 3) | `web_ui` | `snooze_local` | `hold_confirm`
 (I-103 hold-to-confirm ring on locked cards) | `snooze` (server-side
-snooze) | `two_stage_swipe` (I-101) | `bulk` (I-201 bulk triage).
+snooze) | `two_stage_swipe` (I-101) | `bulk` (I-201 bulk triage) |
+`delegate` (I-501 delegation) | `auto_rule` (I-304/I-807 hub
+auto-approval) | `pause` (I-403).
 
 Hub semantics (FR-3.3): the first accepted action flips the task to
 `committing` (see below) and consumes the nonce; concurrent duplicates get
@@ -203,6 +229,19 @@ Hub semantics (FR-3.3): the first accepted action flips the task to
 A wrong nonce → `409 bad_nonce`. Unknown task → `404`. Accepted actions
 are broadcast as `dismissTask` to all connected devices and forwarded to
 `replyUrl` after the undo grace window closes.
+
+### 返信 `data` の素通し項目
+
+`data` はハブが検証せず `replyUrl` へ素通しする。クライアントが送って
+よい予約キー:
+
+| Key | 送り元 | Notes |
+|---|---|---|
+| `choice` | 二択カード (I-111) | 選んだ `choices[].id`。`onSwipeUp.payload` / `onSwipeDown.payload` にマージして送る |
+| `acceptedRows` | 行選択 (I-112) | 承認した DiffBox 行の id 配列。行に文字列 `id` がなければ index を文字列化したもの |
+| `edited` | 値調整 (I-114) | `{componentId, value}` — インスペクト前にその場で変えた値 |
+| `proposeAutomation` | 二段スワイプ (I-101) | `true` — 「承認＋自動化を提案」 |
+| `muteSimilar` | 却下チップ | `true` — このエージェントの同種提案をミュート |
 
 ### サーバー側スヌーズ
 
@@ -225,6 +264,35 @@ are broadcast as `dismissTask` to all connected devices and forwarded to
 taskId は差し替え）。スヌーズ中は `expiresAt` の期限判定を行わず、
 再浮上後に評価する。
 
+### 委任 (I-501)
+
+カードを同僚に回す。決定ではないので nonce は消費しない:
+
+```json
+{ "taskId": "task_98234", "nonce": "tok_sec_abc123", "action": "delegate", "data": { "to": "alice" } }
+```
+
+`data.to` は必須の非空文字列（なければ `400`）。ハブは
+`task.delegatedTo` に `to` を記録し、`pending` のまま
+`createTaskCard`（`revised: true`）と
+`delegateTask {taskId, to}` を配信する。応答は
+`200 {ok, taskId, delegatedTo}`。`bulk` の項目としても送れる
+（`{taskId, nonce, action: "delegate", data: {to}}`）。
+
+### 二人承認 (I-502)
+
+`requiredApprovals: N`（N ≥ 1、既定 1）のカードは N 人の承認が揃うまで
+確定しない。最初の N−1 件は `pending` のまま記録され、**nonce は作り直し**
+（同じ端末の二重承認を防ぐ）、
+`approvalProgress {taskId, count, required}` と差し替えた
+`createTaskCard` が配信される。応答は
+`200 {ok, taskId, approvalProgress: {count, required}}`。
+N 件目はいつものコミット経路（`committing` → `commitAt` → `processed`）
+を通る。記録は `approvals: [{source, at}]`。
+
+スナップショットの `approvalProgress`（`{taskId: count}`）で途中経過が
+見える。却下・スヌーズ・委任は人数に関係なく即座に効く。
+
 ### 一括承認（I-201）
 
 `POST /api/v1/actions/bulk` は複数の決定を 1 リクエストで適用する:
@@ -238,7 +306,8 @@ taskId は差し替え）。スヌーズ中は `expiresAt` の期限判定を行
 
 各項目は `/api/v1/actions` の 1 件分とまったく同じ形に正規化され
 （`action` は `actionName`、`source` の既定は `bulk`）、**独立に CAS**
-される。1 件の失敗が他を巻き戻すことはない。応答は常に `200`:
+される。1 件の失敗が他を巻き戻すことはない。`delegate` の項目
+（`{…, action: "delegate", data: {to}}`）も受け付ける。応答は常に `200`:
 
 ```json
 { "results": [
@@ -430,3 +499,132 @@ SDK は `GET /api/v1/tasks/{id}/result?wait=<sec>` で結果を待てる
   記録済みの `outcome`）。`withdraw` は `name: "withdraw"` として現れる。
 - `delivery` は返送リトライの状態（I-604）。まだ送信前なら省略。
 
+### 緊急停止（I-403）
+
+運用者がフリート全体を止める。**勧告的**な停止で、新規 enqueue は受け付け
+続ける — エージェントは停止を知って自発的に新しい行動を止める（SDK が
+既定実装を持つ）。
+
+```
+POST /api/v1/pause    Authorization: Bearer $CLIENT_TOKEN
+body = {} または { "until": "2026-10-05T09:00:00Z" }
+
+POST /api/v1/resume   Authorization: Bearer $CLIENT_TOKEN
+body なし
+```
+
+- **pause** は `pauseState {paused: true, until?}` を配信し、
+  `200 {ok, paused: true, until?}` を返す。`until` は任意の ISO 8601
+  （不正なら `400`）；過ぎたら停止は自動で解けた扱い（`state.paused` は
+  false に戻る）。
+- **resume** は停止を解除し、`pauseState {paused: false}` を配信する。
+  応答は `200 {ok, paused: false}`。
+- 停止中も `snapshot` / `/state` の `paused` が true になり、エージェントは
+  SSE・`/state`・`result` 経由で停止を知る。エージェントは停止中、新しい
+  行動（enqueue 済みカードの実行を含む）を開始すべきではない
+  （`SHOULD NOT start`）。
+
+### 自動承認ルールと権限リース（I-304 / I-807 / I-602）
+
+同じパターンの承認が続いたら、クライアントは「今後は自動承認しますか?」
+と提案できる（I-304）。ルールはハブが持ち、コードで管理する（I-807）。
+リース（I-602）はルールの自己制限 — 「このエージェントに今日だけ $50
+まで」の期限・上限・対象を指定し、範囲内のカードだけ自動承認する。
+
+```
+GET /api/v1/rules    Authorization: Bearer $CLIENT_TOKEN
+→ 200 {rules: [...]}
+
+PUT /api/v1/rules    Authorization: Bearer $CLIENT_TOKEN
+body = { "rules": [ Rule, … ] }
+→ 200 {ok: true, rules: [...]}（+ ruleChanged {rules} を配信）
+```
+
+```json
+{
+  "id": "cheap-calendar",
+  "match": { "agent": "Calendar", "severity": ["info", "warning"], "maxCost": 50 },
+  "lease": { "until": "2026-10-06T00:00:00Z", "maxCount": 20 },
+  "enabled": true
+}
+```
+
+| Field | Notes |
+|---|---|
+| `id` | 必須の非空文字列。運用で一意にすること（一致判定は先勝ち） |
+| `match.agent` | `agent.name` の部分一致 |
+| `match.severity` | 許容 severity 配列（空/省略 = すべて） |
+| `match.maxCost` | `impact.cost.amount` の上限。コストなしのカードは 0 として扱う |
+| `match.groupKey` | `groupKey` の部分一致 |
+| `lease.until` | ISO 8601。これを過ぎたらルールは発火しない |
+| `lease.maxCount` | 自動承認の上限回数。1 以上の整数 |
+| `enabled` | 真偽値。省略時は true |
+
+- 不正なルール（`id` 欠落、`severity` が非配列、`maxCount` が 1 未満、
+  `until` が不正日付、`enabled` が非真偽値）は `400` ではじく —
+  自動承認の条件を黙って広げないため、緩い検証はしない。
+- **PUT はルール集合を丸ごと置換**する。新しいルールは保存以降に
+  enqueue されるカードにだけ適用され、**待機中の backlog は掃き出さない**。
+- マッチした新規カードは即座に自動承認される（grace 0）:
+  `outcome {name: "approve", data: {byRule}, source: "auto_rule"}` を記録し、
+  `dismissTask {taskId, by: "auto_rule"}` を配信、`replyUrl` へ通常通り返送
+  する（再試行つき）。`createTaskCard` は配信しない（スタックに載らない）。
+- 発火ごとに `leaseUsed[ruleId]` を +1 し、`maxCount` に達したらそのルールは
+  失効する。`until` 過ぎも失効。どちらも `ruleChanged` では通知しない
+  （`GET /rules` で現在の集合を確認できる）。
+
+### ペアリングと端末トークン（I-808 / I-809）
+
+ハブ URL とトークンの手入力をやめ、PC の Web UI に出した QR
+（`/pair?code=…` の URL）を読み込むだけにする。トークンは端末ごと。
+
+```
+POST /api/v1/pair          Authorization: Bearer $CLIENT_TOKEN
+body = { "device": "pixel-9", "user": "alice" }（どちらも任意）
+→ 200 {code: "XK7Q2M", expiresAt: "…", url: "https://hub/pair?code=XK7Q2M"}
+
+POST /api/v1/pair/redeem   認証なし（code の所持が credential）
+body = { "code": "XK7Q2M" }
+→ 200 {token: "dev_<uuid>", user: "alice"}
+```
+
+- `code` は 6 文字（紛らわしい字を除く）、TTL 5 分、**使い捨て**。
+  期限切れ・使用済み・未知の code は `404 invalid_code`。
+- `pair` の `user` 省略時は、呼び出し元が端末トークンならその user、
+  `$CLIENT_TOKEN` なら `"default"` になる。
+- `token` は `dev_<uuid>`。ハブは SHA-256 ハッシュだけを保存し
+  （`device:<sha256>` → `{user, createdAt}`）、平文は保持しない。
+- 端末トークンで認証したリクエストは、その user の Durable Object
+  （`user:<user>`）に振り分けられる。`$CLIENT_TOKEN` は共有の `global`
+  DO。SSE の `?token=` でも同じ解決をする。
+
+### Web Push（I-701）
+
+Web UI を PWA 化する前の、ブラウザ通知のハブ側実装。VAPID 鍵が未設定なら
+送信は黙ってスキップする（`VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` /
+`VAPID_SUBJECT`）。
+
+```
+POST   /api/v1/push/subscribe    Authorization: Bearer $CLIENT_TOKEN
+body = { "endpoint": "https://…", "keys": { "p256dh": "…", "auth": "…" } }
+→ 201 {ok: true}
+
+DELETE /api/v1/push/subscribe    Authorization: Bearer $CLIENT_TOKEN
+body = 同上（endpoint で特定）
+→ 204（body なし）
+
+GET    /api/v1/push/vapid        Authorization: Bearer $CLIENT_TOKEN
+→ 200 {publicKey: "<base64url>"}
+```
+
+- 購読は認証スコープの DO に保存する（`$CLIENT_TOKEN` なら global、
+  端末トークンならその user の DO）。
+- 新規カードの `createTaskCard` 配信時にだけ、ハブが全購読へ
+  ファイア・アンド・フォーゲットで送る（update の再配信では送らない）。
+  ペイロードは `{title: "AgentDesk", body: summary, taskId}`、TTL 3600。
+- 暗号化は RFC 8291 `aes128gcm`（ECDH P-256 + HKDF-SHA256 +
+  AES-128-GCM、WebCrypto のみ）、認証は VAPID JWT（ES256、
+  `aud` = endpoint の origin、`sub` = `VAPID_SUBJECT` 既定
+  `mailto:admin@localhost`）。`Authorization: vapid t=<jwt>, k=<public>`。
+- 送信先が `404` / `410` を返したら購読を削除する。その他の失敗は捨てる
+  （再試行しない）。

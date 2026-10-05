@@ -21,7 +21,8 @@
       <span id="status-dot" class="dot" title="接続状態"></span>
     </div>
     <span id="pending-count" class="count" hidden></span>
-    <button id="fleet-toggle" class="btn ghost sm" type="button" aria-pressed="false" title="エージェント別レーン">Fleet</button>
+    <button id="snoozed-chip" class="chip-count" type="button" title="サーバーでスヌーズ中" hidden></button>
+    <button id="quiet-chip" class="chip-count dim" type="button" title="おやすみ時間中に保留" hidden></button>
     <button id="pause-btn" class="btn danger sm" type="button" title="緊急停止">緊急停止</button>
     <button id="settings-toggle" class="btn ghost sm" type="button">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -33,6 +34,7 @@
   </header>
 
   <div id="pause-banner" class="pause-banner" hidden></div>
+  <div id="stamp-banner" class="stamp-banner" hidden></div>
 
   <section id="fleet-panel" class="fleet" aria-label="エージェント別レーン" hidden></section>
 
@@ -45,6 +47,23 @@
       <span>Client token</span>
       <input id="token-input" type="password" autocomplete="off" placeholder="dev-client-token" />
     </label>
+    <div class="settings-row">
+      <span class="settings-label">おやすみ時間（重要以外を保留）</span>
+      <div class="settings-times">
+        <input id="quiet-start" type="time" aria-label="おやすみ開始" />
+        <span aria-hidden="true">〜</span>
+        <input id="quiet-end" type="time" aria-label="おやすみ終了" />
+      </div>
+    </div>
+    <div class="settings-row">
+      <span class="settings-label">ペアリング（他の端末を追加）</span>
+      <button id="pair-btn" class="btn ghost" type="button">ペアリングコードを発行</button>
+      <div id="pair-result" class="pair-result"></div>
+    </div>
+    <div class="settings-row">
+      <span class="settings-label">通知（新しい要求をプッシュ）</span>
+      <button id="push-btn" class="btn ghost" type="button" hidden>通知を有効にする</button>
+    </div>
     <div class="settings-actions">
       <button id="settings-pause" class="btn danger" type="button">緊急停止</button>
       <button id="save-settings" class="btn primary" type="button">接続</button>
@@ -58,6 +77,7 @@
   <footer class="kbd-hints" aria-hidden="true">
     <span><kbd>→</kbd>承認</span>
     <span><kbd>←</kbd>却下</span>
+    <span><kbd>↑</kbd><kbd>↓</kbd>選択</span>
     <span><kbd>Shift</kbd>+<kbd>→</kbd>承認+自動化</span>
     <span><kbd>j</kbd>/<kbd>k</kbd>移動</span>
     <span><kbd>i</kbd>詳細</span>
@@ -82,10 +102,11 @@
       <ul class="kbd-list">
         <li><span class="kbd-keys"><kbd>→</kbd></span><span>選択中のカードを承認</span></li>
         <li><span class="kbd-keys"><kbd>Shift</kbd>+<kbd>→</kbd></span><span>承認 + 自動化を提案（二段）</span></li>
+        <li><span class="kbd-keys"><kbd>↑</kbd> <kbd>↓</kbd></span><span>二択カードの A / B を選択</span></li>
         <li><span class="kbd-keys"><kbd>←</kbd></span><span>却下（理由チップがあれば <kbd>1</kbd>〜<kbd>9</kbd> で選択）</span></li>
         <li><span class="kbd-keys"><kbd>j</kbd> <kbd>k</kbd></span><span>次のカード / 前のカードへ移動</span></li>
         <li><span class="kbd-keys"><kbd>i</kbd></span><span>詳細・修正シートを開く</span></li>
-        <li><span class="kbd-keys"><kbd>s</kbd></span><span>後で（山札の最後尾へ）</span></li>
+        <li><span class="kbd-keys"><kbd>s</kbd></span><span>後で（サーバーにスヌーズ保存）</span></li>
         <li><span class="kbd-keys"><kbd>z</kbd></span><span>直前の操作を元に戻す</span></li>
         <li><span class="kbd-keys"><kbd>1</kbd>〜<kbd>9</kbd></span><span>理由チップ / クイック選択のチップを選ぶ</span></li>
         <li><span class="kbd-keys"><kbd>Esc</kbd></span><span>シートを閉じる</span></li>

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../models/task_card.dart';
 import '../colors.dart';
 import 'diff_box.dart';
+import 'value_editor.dart';
 
 /// Maps protocol components to native widgets (FR-1.2). Unknown types
 /// fall back to a generic text card — never a crash (FR-1.3). Payloads
@@ -21,26 +22,74 @@ class ComponentRenderer extends StatelessWidget {
   /// A chip without an action wants the inspect sheet.
   final VoidCallback? onInspect;
 
+  /// Row ids already selected for row-select DiffBoxes (I-112).
+  final Set<String> selectedRowIds;
+
+  /// Fires when a selectable DiffBox row is tapped.
+  final void Function(String rowId)? onRowToggle;
+
+  /// The card's inline-edit hint; the referenced component renders a
+  /// [ValueEditor] underneath (I-114).
+  final EditableHint? editable;
+
+  /// Current edited value for the editable component, if touched.
+  final Object? editedValue;
+
+  /// Fires when the inline editor changes.
+  final void Function(Object value)? onEditedValue;
+
   const ComponentRenderer({
     super.key,
     required this.component,
     this.onAction,
     this.onInspect,
+    this.selectedRowIds = const <String>{},
+    this.onRowToggle,
+    this.editable,
+    this.editedValue,
+    this.onEditedValue,
   });
 
   @override
   Widget build(BuildContext context) {
-    switch (component.component) {
-      case 'Text':
-        return _text(context);
-      case 'DiffBox':
-        return DiffBox(properties: component.properties);
-      case 'Chips':
-        return _chips(context);
-      default:
-        return _fallback(context);
-    }
+    final Widget rendered = switch (component.component) {
+      'Text' => _text(context),
+      'DiffBox' => DiffBox(
+          properties: component.properties,
+          selectedIds: selectedRowIds,
+          onRowToggle: onRowToggle,
+        ),
+      'Chips' => _chips(context),
+      _ => _fallback(context),
+    };
+    return _maybeEditable(component, rendered);
   }
+
+  /// The component named by `task.editable` shows its inline editor
+  /// right below itself (I-114).
+  Widget _maybeEditable(CardComponent component, Widget child) {
+    final hint = editable;
+    if (hint == null ||
+        hint.componentId.isEmpty ||
+        hint.componentId != component.id) {
+      return child;
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        child,
+        const SizedBox(height: 8),
+        ValueEditor(
+          hint: hint,
+          properties: component.properties,
+          value: editedValue,
+          onChanged: (v) => onEditedValue?.call(v),
+        ),
+      ],
+    );
+  }
+
 
   Widget _text(BuildContext context) {
     final text = '${component.properties['text'] ?? ''}';

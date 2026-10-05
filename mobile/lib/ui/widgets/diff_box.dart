@@ -14,7 +14,22 @@ import '../colors.dart';
 class DiffBox extends StatelessWidget {
   final Map<String, dynamic> properties;
 
-  const DiffBox({super.key, required this.properties});
+  /// Row ids already tapped for approve (I-112); empty = approve all.
+  final Set<String> selectedIds;
+
+  /// Fires when a selectable row is tapped.
+  final void Function(String rowId)? onRowToggle;
+
+  const DiffBox({
+    super.key,
+    required this.properties,
+    this.selectedIds = const <String>{},
+    this.onRowToggle,
+  });
+
+  /// `properties.selectable == true`: rows tap-toggle a check and the
+  /// approve sends `data.acceptedRows=[selected ids]`.
+  bool get selectable => properties['selectable'] == true;
 
   Color get _highlightColor {
     switch (properties['highlight']) {
@@ -27,18 +42,23 @@ class DiffBox extends StatelessWidget {
     }
   }
 
+  /// Rows carry the agent's row `id` when present, else `r<index>`.
   List<Map<String, String>> get _rows {
     final raw = properties['rows'];
     if (raw is! List) return const [];
-    return [
-      for (final r in raw)
-        if (r is Map)
-          {
-            if (r['label'] != null) 'label': '${r['label']}',
-            'before': '${r['before'] ?? ''}',
-            'after': '${r['after'] ?? ''}',
-          },
-    ];
+    final out = <Map<String, String>>[];
+    for (var i = 0; i < raw.length; i++) {
+      final r = raw[i];
+      if (r is! Map) continue;
+      final id = r['id'];
+      out.add({
+        'id': id is String && id.isNotEmpty ? id : 'r$i',
+        if (r['label'] != null) 'label': '${r['label']}',
+        'before': '${r['before'] ?? ''}',
+        'after': '${r['after'] ?? ''}',
+      });
+    }
+    return out;
   }
 
   String? get _inline {
@@ -71,13 +91,30 @@ class DiffBox extends StatelessWidget {
                   bottom: BorderSide(color: Color(0x141B1E16)),
                 ),
               ),
-              child: Text(
-                title,
-                style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      color: PopColors.text2,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 0.3,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                            color: PopColors.text2,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.3,
+                          ),
                     ),
+                  ),
+                  if (selectable)
+                    Text(
+                      selectedIds.isEmpty
+                          ? '全選択中'
+                          : '${selectedIds.length}件選択',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: PopColors.text2,
+                      ),
+                    ),
+                ],
               ),
             ),
           _ValuePair(
@@ -87,17 +124,63 @@ class DiffBox extends StatelessWidget {
           ),
           for (final row in _rows) ...[
             const SizedBox(height: 2),
-            _ValuePair(
-              before: row['before'] ?? '',
-              after: row['after'] ?? '',
-              label: row['label'],
-              durationMin: int.tryParse('${properties['duration'] ?? ''}') ?? 60,
-            ),
+            if (selectable)
+              _toggleRow(
+                row['id']!,
+                _ValuePair(
+                  before: row['before'] ?? '',
+                  after: row['after'] ?? '',
+                  label: row['label'],
+                  durationMin:
+                      int.tryParse('${properties['duration'] ?? ''}') ?? 60,
+                ),
+              )
+            else
+              _ValuePair(
+                before: row['before'] ?? '',
+                after: row['after'] ?? '',
+                label: row['label'],
+                durationMin:
+                    int.tryParse('${properties['duration'] ?? ''}') ?? 60,
+              ),
           ],
           if (_inline != null) ...[
             const SizedBox(height: 4),
             _Inline(text: _inline!),
           ],
+        ],
+      ),
+    );
+  }
+
+  /// One selectable row (I-112): tap anywhere to toggle the check.
+  Widget _toggleRow(String id, Widget child) {
+    final selected = selectedIds.contains(id);
+    return InkWell(
+      onTap: () => onRowToggle?.call(id),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(left: 13, top: 14),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 140),
+              width: 20,
+              height: 20,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: selected ? PopColors.green : Colors.transparent,
+                border: Border.all(
+                  color: selected ? PopColors.green : PopColors.text3,
+                  width: 1.5,
+                ),
+              ),
+              child: selected
+                  ? const Icon(Icons.check, size: 14, color: Colors.white)
+                  : null,
+            ),
+          ),
+          Expanded(child: child),
         ],
       ),
     );

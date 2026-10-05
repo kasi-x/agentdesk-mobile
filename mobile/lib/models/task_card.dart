@@ -100,6 +100,25 @@ class RejectReason {
   }
 }
 
+/// One option of a `decisionKind: "choose"` card (I-111). The reply
+/// echoes the picked option back as `data.choice = id`.
+class Choice {
+  final String id;
+  final String label;
+
+  const Choice({required this.id, required this.label});
+
+  factory Choice.fromJson(dynamic raw) {
+    if (raw is! Map) return const Choice(id: '', label: '?');
+    return Choice(
+      id: (raw['id'] as String?) ?? '',
+      label: (raw['label'] as String?)?.isNotEmpty == true
+          ? raw['label'] as String
+          : '?',
+    );
+  }
+}
+
 /// What accepting this card does (I-202). All fields optional.
 class CardImpact {
   final String? summary;
@@ -256,6 +275,12 @@ class TaskCard {
   final List<CardComponent> components;
   final ActionBinding? onSwipeRight;
   final ActionBinding? onSwipeLeft;
+  /// Up-swipe binding; required together with `onSwipeDown` for
+  /// `decisionKind: "choose"` cards (I-111).
+  final ActionBinding? onSwipeUp;
+  /// Down-swipe binding for `decisionKind: "choose"` cards (I-111).
+  /// Approve cards keep down = snooze client-side.
+  final ActionBinding? onSwipeDown;
   final List<CardComponent> inspectForm;
   final CardImpact? impact;
   /// Agent-supplied reject reasons (I-118). On left swipe the client
@@ -277,6 +302,15 @@ class TaskCard {
   final String decisionKind;
   /// Inline value editing hint (I-114); null = not editable in place.
   final EditableHint? editable;
+  /// How many distinct approvals the card needs before it commits
+  /// (I-502); always >= 1, default 1.
+  final int requiredApprovals;
+  /// Options for `decisionKind: "choose"` (I-111); empty unless a choose
+  /// card. Entries with an empty id are dropped.
+  final List<Choice> choices;
+  /// Hub-set: the colleague this card was delegated to (I-501);
+  /// null = not delegated.
+  final String? delegatedTo;
   /// Hub-computed urgency score (I-206); higher = more urgent.
   final double? priority;
   /// Hub marker on re-broadcasts after an agent update (I-204).
@@ -297,6 +331,8 @@ class TaskCard {
     required this.components,
     required this.onSwipeRight,
     required this.onSwipeLeft,
+    this.onSwipeUp,
+    this.onSwipeDown,
     required this.inspectForm,
     required this.impact,
     this.rejectReasons = const <RejectReason>[],
@@ -306,6 +342,9 @@ class TaskCard {
     this.groupKey,
     this.decisionKind = 'approve',
     this.editable,
+    this.requiredApprovals = 1,
+    this.choices = const <Choice>[],
+    this.delegatedTo,
     this.priority,
     this.revised = false,
   });
@@ -323,6 +362,7 @@ class TaskCard {
     final createdAtRaw = raw['createdAt'];
     final createdAt = DateTime.tryParse(createdAtRaw is String ? createdAtRaw : '') ?? DateTime.now();
     final actions = raw['actions'] is Map ? Map<String, dynamic>.from(raw['actions'] as Map) : const <String, dynamic>{};
+    final requiredApprovalsRaw = raw['requiredApprovals'];
     return TaskCard(
       taskId: (raw['taskId'] as String?) ??
           'task_unknown_${DateTime.now().microsecondsSinceEpoch}',
@@ -349,6 +389,12 @@ class TaskCard {
       onSwipeLeft: actions['onSwipeLeft'] == null
           ? null
           : ActionBinding.fromJson(actions['onSwipeLeft']),
+      onSwipeUp: actions['onSwipeUp'] == null
+          ? null
+          : ActionBinding.fromJson(actions['onSwipeUp']),
+      onSwipeDown: actions['onSwipeDown'] == null
+          ? null
+          : ActionBinding.fromJson(actions['onSwipeDown']),
       inspectForm: actions['inspectForm'] is List
           ? (actions['inspectForm'] as List).map(CardComponent.fromJson).toList()
           : const <CardComponent>[],
@@ -372,6 +418,20 @@ class TaskCard {
               : 'approve',
       editable: raw['editable'] is Map
           ? EditableHint.fromJson(raw['editable'])
+          : null,
+      requiredApprovals: requiredApprovalsRaw is num &&
+              requiredApprovalsRaw.toInt() >= 1
+          ? requiredApprovalsRaw.toInt()
+          : 1,
+      choices: raw['choices'] is List
+          ? (raw['choices'] as List)
+              .map(Choice.fromJson)
+              .where((c) => c.id.isNotEmpty)
+              .toList()
+          : const <Choice>[],
+      delegatedTo: raw['delegatedTo'] is String &&
+              (raw['delegatedTo'] as String).isNotEmpty
+          ? raw['delegatedTo'] as String
           : null,
       priority: raw['priority'] is num
           ? (raw['priority'] as num).toDouble()
@@ -437,6 +497,18 @@ class TaskCard {
               if (onSwipeLeft!.label != null) 'label': onSwipeLeft!.label,
               'payload': onSwipeLeft!.payload,
             },
+          if (onSwipeUp != null)
+            'onSwipeUp': <String, dynamic>{
+              'actionName': onSwipeUp!.actionName,
+              if (onSwipeUp!.label != null) 'label': onSwipeUp!.label,
+              'payload': onSwipeUp!.payload,
+            },
+          if (onSwipeDown != null)
+            'onSwipeDown': <String, dynamic>{
+              'actionName': onSwipeDown!.actionName,
+              if (onSwipeDown!.label != null) 'label': onSwipeDown!.label,
+              'payload': onSwipeDown!.payload,
+            },
           'inspectForm': inspectForm
               .map((c) => <String, dynamic>{
                     'id': c.id,
@@ -489,6 +561,12 @@ class TaskCard {
             if (editable!.max != null) 'max': editable!.max,
             if (editable!.step != null) 'step': editable!.step,
           },
+        if (requiredApprovals != 1) 'requiredApprovals': requiredApprovals,
+        if (choices.isNotEmpty)
+          'choices': choices
+              .map((c) => <String, dynamic>{'id': c.id, 'label': c.label})
+              .toList(),
+        if (delegatedTo != null) 'delegatedTo': delegatedTo,
         if (priority != null) 'priority': priority,
         if (revised) 'revised': revised,
       };

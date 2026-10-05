@@ -216,4 +216,116 @@ BULK_RES=$(body -X POST "$BASE/api/v1/actions/bulk" \
 [ "$(echo "$BULK_RES" | jq -r --arg b "$BULK_B" '[.results[] | select(.taskId==$b and .error=="bad_nonce")] | length')" = "1" ] \
   || { echo "bulk did not isolate the failing item: $BULK_RES" >&2; exit 1; }
 
+echo "→ pause sets state.paused, resume clears it (I-403)"
+[ "$(code -X POST "$BASE/api/v1/pause" \
+  -H "Authorization: Bearer $CLIENT_TOKEN" -H "Content-Type: application/json" \
+  -d '{"until":"2999-01-01T00:00:00Z"}')" = "200" ] || { echo "pause failed" >&2; exit 1; }
+[ "$(body "$BASE/api/v1/state" -H "Authorization: Bearer $CLIENT_TOKEN" \
+  | jq -r '.paused')" = "true" ] || { echo "state.paused not set" >&2; exit 1; }
+[ "$(code -X POST "$BASE/api/v1/resume" \
+  -H "Authorization: Bearer $CLIENT_TOKEN")" = "200" ] || { echo "resume failed" >&2; exit 1; }
+[ "$(body "$BASE/api/v1/state" -H "Authorization: Bearer $CLIENT_TOKEN" \
+  | jq -r '.paused')" = "false" ] || { echo "state.paused not cleared" >&2; exit 1; }
+
+echo "→ delegate keeps the card pending with delegatedTo (I-501)"
+DEL_ID="task_smoke_del_$(date +%s)"
+DEL_NONCE="tok_del_$$"
+[ "$(code -X POST "$BASE/api/v1/tasks" \
+  -H "Authorization: Bearer $AGENT_TOKEN" -H "Content-Type: application/json" \
+  -d "$(jq -n --arg id "$DEL_ID" --arg nonce "$DEL_NONCE" '{
+      type: "createTaskCard", taskId: $id, nonce: $nonce,
+      agent: { name: "Smoke Agent" }, summary: "delegate smoke task",
+      components: [], actions: { onSwipeRight: { actionName: "approve" } }
+    }')")" = "201" ] || { echo "delegate target create failed" >&2; exit 1; }
+DEL_RES=$(body -X POST "$BASE/api/v1/actions" \
+  -H "Authorization: Bearer $CLIENT_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"taskId\":\"$DEL_ID\",\"nonce\":\"$DEL_NONCE\",\"action\":\"delegate\",\"source\":\"web_ui\",\"data\":{\"to\":\"alice\"}}")
+[ "$(echo "$DEL_RES" | jq -r '.delegatedTo')" = "alice" ] \
+  || { echo "delegate did not return delegatedTo: $DEL_RES" >&2; exit 1; }
+[ "$(body "$BASE/api/v1/state" -H "Authorization: Bearer $CLIENT_TOKEN" \
+  | jq -r --arg id "$DEL_ID" '.tasks[] | select(.taskId==$id) | .delegatedTo')" = "alice" ] \
+  || { echo "delegatedTo not visible in /state" >&2; exit 1; }
+
+echo "→ requiredApprovals:2 commits only on the second approval (I-502)"
+APPR_ID="task_smoke_appr_$(date +%s)"
+APPR_NONCE="tok_appr_$$"
+[ "$(code -X POST "$BASE/api/v1/tasks" \
+  -H "Authorization: Bearer $AGENT_TOKEN" -H "Content-Type: application/json" \
+  -d "$(jq -n --arg id "$APPR_ID" --arg nonce "$APPR_NONCE" '{
+      type: "createTaskCard", taskId: $id, nonce: $nonce, requiredApprovals: 2,
+      agent: { name: "Smoke Agent" }, summary: "two-approval smoke task",
+      components: [], actions: { onSwipeRight: { actionName: "approve" } }
+    }')")" = "201" ] || { echo "two-approval create failed" >&2; exit 1; }
+FIRST_RES=$(body -X POST "$BASE/api/v1/actions" \
+  -H "Authorization: Bearer $CLIENT_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"taskId\":\"$APPR_ID\",\"nonce\":\"$APPR_NONCE\",\"actionName\":\"approve\",\"source\":\"web_ui\"}")
+[ "$(echo "$FIRST_RES" | jq -r '.approvalProgress.count')" = "1" ] \
+  || { echo "first approval did not return progress: $FIRST_RES" >&2; exit 1; }
+[ "$(body "$BASE/api/v1/state" -H "Authorization: Bearer $CLIENT_TOKEN" \
+  | jq -r --arg id "$APPR_ID" '.approvalProgress[$id]')" = "1" ] \
+  || { echo "approvalProgress missing from /state" >&2; exit 1; }
+APPR_NONCE2=$(body "$BASE/api/v1/state" -H "Authorization: Bearer $CLIENT_TOKEN" \
+  | jq -r --arg id "$APPR_ID" '.tasks[] | select(.taskId==$id) | .nonce')
+[ -n "$APPR_NONCE2" ] && [ "$APPR_NONCE2" != "$APPR_NONCE" ] \
+  || { echo "nonce not rotated after partial approval" >&2; exit 1; }
+SECOND_RES=$(body -X POST "$BASE/api/v1/actions" \
+  -H "Authorization: Bearer $CLIENT_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"taskId\":\"$APPR_ID\",\"nonce\":\"$APPR_NONCE2\",\"actionName\":\"approve\",\"source\":\"web_ui\"}")
+[ -n "$(echo "$SECOND_RES" | jq -r '.commitAt // empty')" ] \
+  || { echo "second approval did not commit: $SECOND_RES" >&2; exit 1; }
+
+echo "→ rules PUT auto-approves the next matching enqueue (I-304/I-807)"
+RULE_AGENT="SmokeRuleAgent_$(date +%s)"
+[ "$(code -X PUT "$BASE/api/v1/rules" \
+  -H "Authorization: Bearer $CLIENT_TOKEN" -H "Content-Type: application/json" \
+  -d "$(jq -n --arg agent "$RULE_AGENT" '{rules: [{id: "smoke_auto", match: {agent: $agent, severity: ["info"]}, enabled: true}]}')")" = "200" ] \
+  || { echo "rules PUT failed" >&2; exit 1; }
+[ "$(body "$BASE/api/v1/rules" -H "Authorization: Bearer $CLIENT_TOKEN" \
+  | jq -r '.rules[0].id')" = "smoke_auto" ] || { echo "rules GET missing the rule" >&2; exit 1; }
+AUTO_ID="task_smoke_auto_$(date +%s)"
+AUTO_RES=$(body -X POST "$BASE/api/v1/tasks" \
+  -H "Authorization: Bearer $AGENT_TOKEN" -H "Content-Type: application/json" \
+  -d "$(jq -n --arg id "$AUTO_ID" --arg agent "$RULE_AGENT" '{
+      type: "createTaskCard", taskId: $id, agent: { name: $agent },
+      summary: "auto-approve smoke task", components: []
+    }')")
+[ "$(echo "$AUTO_RES" | jq -r '.autoApproved')" = "true" ] \
+  || { echo "enqueue was not auto-approved: $AUTO_RES" >&2; exit 1; }
+[ "$(body "$BASE/api/v1/tasks/$AUTO_ID/result" -H "Authorization: Bearer $AGENT_TOKEN" \
+  | jq -r '.action.source')" = "auto_rule" ] \
+  || { echo "auto-approval not recorded as auto_rule" >&2; exit 1; }
+PLAIN_ID="task_smoke_plain_$(date +%s)"
+[ "$(code -X POST "$BASE/api/v1/tasks" \
+  -H "Authorization: Bearer $AGENT_TOKEN" -H "Content-Type: application/json" \
+  -d "$(jq -n --arg id "$PLAIN_ID" '{
+      type: "createTaskCard", taskId: $id, agent: { name: "Smoke Agent" },
+      summary: "plain smoke task", components: []
+    }')")" = "201" ] || { echo "plain create failed" >&2; exit 1; }
+[ "$(body "$BASE/api/v1/state" -H "Authorization: Bearer $CLIENT_TOKEN" \
+  | jq -r --arg id "$PLAIN_ID" '[.tasks[] | select(.taskId==$id)] | length')" = "1" ] \
+  || { echo "non-matching card missing from the stack" >&2; exit 1; }
+[ "$(code -X PUT "$BASE/api/v1/rules" \
+  -H "Authorization: Bearer $CLIENT_TOKEN" -H "Content-Type: application/json" \
+  -d '{"rules":[]}')" = "200" ] || { echo "rules cleanup failed" >&2; exit 1; }
+
+echo "→ pair + redeem yields a device token that reads /state (I-808)"
+PAIR_RES=$(body -X POST "$BASE/api/v1/pair" \
+  -H "Authorization: Bearer $CLIENT_TOKEN" -H "Content-Type: application/json" \
+  -d '{"user":"smoke_user"}')
+PAIR_CODE=$(echo "$PAIR_RES" | jq -r '.code // empty')
+[ -n "$PAIR_CODE" ] || { echo "pair did not return a code: $PAIR_RES" >&2; exit 1; }
+[ -n "$(echo "$PAIR_RES" | jq -r '.url // empty')" ] \
+  || { echo "pair did not return a url" >&2; exit 1; }
+REDEEM_RES=$(body -X POST "$BASE/api/v1/pair/redeem" \
+  -H "Content-Type: application/json" \
+  -d "{\"code\":\"$PAIR_CODE\"}")
+DEV_TOKEN=$(echo "$REDEEM_RES" | jq -r '.token // empty')
+[ -n "$DEV_TOKEN" ] || { echo "redeem failed: $REDEEM_RES" >&2; exit 1; }
+[ "$(code "$BASE/api/v1/state" -H "Authorization: Bearer $DEV_TOKEN")" = "200" ] \
+  || { echo "device token cannot read /state" >&2; exit 1; }
+echo "→ redeemed codes are one-time"
+[ "$(code -X POST "$BASE/api/v1/pair/redeem" \
+  -H "Content-Type: application/json" -d "{\"code\":\"$PAIR_CODE\"}")" = "404" ] \
+  || { echo "code redeemable twice" >&2; exit 1; }
+
 echo "smoke OK ✅"

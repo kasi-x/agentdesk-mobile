@@ -1,6 +1,8 @@
 import {
   validateActionReply,
   validateBulkRequest,
+  validatePairRequest,
+  validateRedeemRequest,
   validateTaskCard,
   validateUndoRequest,
 } from "./protocol";
@@ -17,6 +19,71 @@ function rebuilt(doRes: Response): Response {
     status: doRes.status,
     headers: { "content-type": "application/json" },
   });
+}
+
+/** DO stub for the caller's scope: `"global"` for the shared CLIENT_TOKEN,
+ *  `"user:<u>"` for a device token bound to user `u` (I-809). */
+function hubStub(env: Env, scope: string): DurableObjectStub {
+  return env.TASK_HUB.get(env.TASK_HUB.idFromName(scope));
+}
+
+/** Resolve a client credential to its DO scope, or null when unknown.
+ *  `CLIENT_TOKEN` → `"global"`; any issued `dev_…` device token →
+ *  `"user:<user>"` via the global DO's token registry (I-808/I-809).
+ *  `?token=` is only honored on GET (EventSource cannot set headers). */
+async function clientScope(
+  request: Request,
+  env: Env,
+  allowQuery = false,
+): Promise<string | null> {
+  let token = bearer(request);
+  if (!token && allowQuery && request.method === "GET") {
+    token = new URL(request.url).searchParams.get("token");
+  }
+  if (!token || token.length === 0) return null;
+  if (env.CLIENT_TOKEN && token === env.CLIENT_TOKEN) return "global";
+  if (token.startsWith("dev_")) {
+    try {
+      const res = await hubStub(env, "global").fetch(
+        "https://task-hub/auth",
+        {
+          method: "POST",
+          body: JSON.stringify({ token }),
+          headers: { "content-type": "application/json" },
+        },
+      );
+      if (res.ok) {
+        const body = (await res.json()) as { user?: unknown };
+        if (typeof body.user === "string" && body.user.length > 0) {
+          return `user:${body.user}`;
+        }
+      }
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** Forward a request to one DO internal path and return the rebuilt
+ *  subresponse. GET never carries a body (fetch forbids it). */
+async function forwardJson(
+  request: Request,
+  env: Env,
+  scope: string,
+  path: string,
+  method = "POST",
+): Promise<Response> {
+  const init: RequestInit = {
+    method,
+    headers: { "content-type": "application/json" },
+  };
+  if (method !== "GET" && method !== "HEAD") {
+    init.body = await request.text();
+  }
+  const doRes = await hubStub(env, scope).fetch(`https://task-hub${path}`, init);
+  if (doRes.status === 204) return new Response(null, { status: 204 });
+  return rebuilt(doRes);
 }
 
 export default {
@@ -57,7 +124,8 @@ export default {
       }
 
       if (url.pathname === "/api/v1/actions" && request.method === "POST") {
-        if (!authorized(request, env.CLIENT_TOKEN)) return unauthorized(request, env);
+        const scope = await clientScope(request, env);
+        if (scope === null) return unauthorized(request, env);
         const parsed = validateActionReply(await request.json());
         if (!parsed.ok) {
           return cors(
@@ -66,7 +134,7 @@ export default {
             env,
           );
         }
-        const doRes = await env.TASK_HUB.getByName("global").fetch(
+        const doRes = await hubStub(env, scope).fetch(
           "https://task-hub/action",
           {
             method: "POST",
@@ -80,7 +148,8 @@ export default {
       }
 
       if (url.pathname === "/api/v1/actions/undo" && request.method === "POST") {
-        if (!authorized(request, env.CLIENT_TOKEN)) return unauthorized(request, env);
+        const scope = await clientScope(request, env);
+        if (scope === null) return unauthorized(request, env);
         const parsed = validateUndoRequest(await request.json());
         if (!parsed.ok) {
           return cors(
@@ -89,7 +158,7 @@ export default {
             env,
           );
         }
-        const doRes = await env.TASK_HUB.getByName("global").fetch(
+        const doRes = await hubStub(env, scope).fetch(
           "https://task-hub/undo",
           {
             method: "POST",
@@ -102,7 +171,8 @@ export default {
       }
 
       if (url.pathname === "/api/v1/actions/bulk" && request.method === "POST") {
-        if (!authorized(request, env.CLIENT_TOKEN)) return unauthorized(request, env);
+        const scope = await clientScope(request, env);
+        if (scope === null) return unauthorized(request, env);
         const parsed = validateBulkRequest(await request.json());
         if (!parsed.ok) {
           return cors(
@@ -111,7 +181,7 @@ export default {
             env,
           );
         }
-        const doRes = await env.TASK_HUB.getByName("global").fetch(
+        const doRes = await hubStub(env, scope).fetch(
           "https://task-hub/bulk",
           {
             method: "POST",
@@ -172,19 +242,125 @@ export default {
       }
 
       if (url.pathname === "/api/v1/stream" && request.method === "GET") {
-        if (!clientAuthorized(request, env)) return unauthorized(request, env);
-        const res = await env.TASK_HUB.getByName("global").fetch(
+        const scope = await clientScope(request, env, true);
+        if (scope === null) return unauthorized(request, env);
+        const res = await hubStub(env, scope).fetch(
           "https://task-hub/connect",
         );
         return cors(res, request, env);
       }
 
       if (url.pathname === "/api/v1/state" && request.method === "GET") {
-        if (!clientAuthorized(request, env)) return unauthorized(request, env);
-        const res = await env.TASK_HUB.getByName("global").fetch(
+        const scope = await clientScope(request, env, true);
+        if (scope === null) return unauthorized(request, env);
+        const res = await hubStub(env, scope).fetch(
           "https://task-hub/state",
         );
         return cors(res, request, env);
+      }
+
+      // Operator pause / resume (I-403): broadcast to the caller's scope.
+      if (url.pathname === "/api/v1/pause" && request.method === "POST") {
+        const scope = await clientScope(request, env);
+        if (scope === null) return unauthorized(request, env);
+        return cors(await forwardJson(request, env, scope, "/pause"), request, env);
+      }
+      if (url.pathname === "/api/v1/resume" && request.method === "POST") {
+        const scope = await clientScope(request, env);
+        if (scope === null) return unauthorized(request, env);
+        return cors(await forwardJson(request, env, scope, "/resume"), request, env);
+      }
+
+      // Auto-approval rules (I-304/I-602/I-807).
+      if (url.pathname === "/api/v1/rules" &&
+        (request.method === "GET" || request.method === "PUT")) {
+        const scope = await clientScope(request, env);
+        if (scope === null) return unauthorized(request, env);
+        return cors(
+          await forwardJson(request, env, scope, "/rules", request.method),
+          request,
+          env,
+        );
+      }
+
+      // QR-less pairing step 1 (I-808). Codes live in the global DO so
+      // any client can redeem them; the code binds the target user, and
+      // the code's user defaults to the pairing caller's own user.
+      if (url.pathname === "/api/v1/pair" && request.method === "POST") {
+        const scope = await clientScope(request, env);
+        if (scope === null) return unauthorized(request, env);
+        const incoming = await request.text();
+        let body: unknown = {};
+        try {
+          body = incoming ? JSON.parse(incoming) : {};
+        } catch {
+          return cors(json({ error: "invalid_payload", detail: "payload must be JSON" }, 400), request, env);
+        }
+        const parsed = validatePairRequest(body);
+        if (!parsed.ok) {
+          return cors(json({ error: "invalid_payload", detail: parsed.error }, 400), request, env);
+        }
+        const value = parsed.value;
+        if (value.user === undefined && scope.startsWith("user:")) {
+          value.user = scope.slice("user:".length);
+        }
+        const doRes = await hubStub(env, "global").fetch(
+          "https://task-hub/pair",
+          {
+            method: "POST",
+            body: JSON.stringify(value),
+            headers: { "content-type": "application/json" },
+          },
+        );
+        const payload = (await doRes.json()) as Record<string, unknown>;
+        if (doRes.ok && typeof payload.code === "string") {
+          payload.url = `${new URL(request.url).origin}/pair?code=${payload.code}`;
+        }
+        const res = new Response(JSON.stringify(payload), {
+          status: doRes.status,
+          headers: { "content-type": "application/json" },
+        });
+        return cors(res, request, env);
+      }
+
+      // Pairing step 2 (I-808): possession of the code is the credential,
+      // so this endpoint deliberately takes no auth.
+      if (url.pathname === "/api/v1/pair/redeem" && request.method === "POST") {
+        const parsed = validateRedeemRequest(await request.json());
+        if (!parsed.ok) {
+          return cors(json({ error: "invalid_payload", detail: parsed.error }, 400), request, env);
+        }
+        const doRes = await hubStub(env, "global").fetch(
+          "https://task-hub/pair/redeem",
+          {
+            method: "POST",
+            body: JSON.stringify(parsed.value),
+            headers: { "content-type": "application/json" },
+          },
+        );
+        return cors(rebuilt(doRes), request, env);
+      }
+
+      // Web Push subscriptions (I-701).
+      if (url.pathname === "/api/v1/push/subscribe" &&
+        (request.method === "POST" || request.method === "DELETE")) {
+        const scope = await clientScope(request, env);
+        if (scope === null) return unauthorized(request, env);
+        const path = request.method === "POST" ? "/push/subscribe" : "/push/unsubscribe";
+        return cors(
+          await forwardJson(request, env, scope, path, request.method),
+          request,
+          env,
+        );
+      }
+      if (url.pathname === "/api/v1/push/vapid" && request.method === "GET") {
+        const scope = await clientScope(request, env, true);
+        if (scope === null) return unauthorized(request, env);
+        return cors(
+          json({ publicKey: env.VAPID_PUBLIC_KEY ?? null }),
+          request,
+          env,
+        );
       }
 
       // Static assets (web UI) — no auth; the token is entered client-side.
@@ -210,13 +386,6 @@ function authorized(request: Request, token: string | undefined): boolean {
   return !!token && token.length > 0 && bearer(request) === token;
 }
 
-/** The stream also accepts ?token= (EventSource cannot set headers). */
-function clientAuthorized(request: Request, env: Env): boolean {
-  return authorized(request, env.CLIENT_TOKEN) ||
-    (!!env.CLIENT_TOKEN &&
-      new URL(request.url).searchParams.get("token") === env.CLIENT_TOKEN);
-}
-
 function unauthorized(request: Request, env: Env): Response {
   const configured = !!(env.AGENT_TOKEN && env.CLIENT_TOKEN);
   return cors(
@@ -239,7 +408,10 @@ function cors(response: Response, request: Request, env: Env): Response {
     .map((s) => s.trim());
   if (allowed.includes("*") || allowed.includes(origin)) {
     response.headers.set("Access-Control-Allow-Origin", origin);
-    response.headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    response.headers.set(
+      "Access-Control-Allow-Methods",
+      "GET, POST, PUT, DELETE, OPTIONS",
+    );
     response.headers.set(
       "Access-Control-Allow-Headers",
       "Authorization, Content-Type",

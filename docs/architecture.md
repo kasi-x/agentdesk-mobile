@@ -106,6 +106,32 @@ by parsed data — no WebView/eval anywhere (NFR-2.1).
   before `cors()` header mutation (`backend/src/index.ts`) — immutable
   subresponse headers surfaced browser POSTs as 500.
 
+## Wave 2 additions
+
+- **Per-user Durable Objects + device tokens (I-808/I-809).** The router
+  resolves a client credential to a scope: `CLIENT_TOKEN` → `"global"`,
+  an issued `dev_…` token → `"user:<user>"` (hashed lookup in the global
+  DO). The stub comes from `TASK_HUB.idFromName(scope)`, so each user's
+  tasks, rules, pause flag and push subscriptions live in a separate
+  object. Pairing (`POST /api/v1/pair` → code, `…/pair/redeem` → token)
+  is the only unauthenticated client endpoint besides `/healthz` —
+  possession of the one-time code is the credential. Pairing state itself
+  lives in the `global` DO so any client can redeem.
+- **Advisory fleet pause (I-403).** `pauseState {paused, until?}` is a
+  broadcast plus a snapshot flag; enqueue keeps working. Agents are
+  expected to stop starting new work (SDK default), not forced.
+- **Auto-approval rules + lease (I-304/I-602/I-807).** Rules live in the
+  DO (`hub:rules`), spend counters in `hub:leaseUsed`. Only cards
+  enqueued after a rule is stored are evaluated — the backlog is never
+  swept. A match commits immediately (grace 0) as `source: "auto_rule"`
+  with normal delivery + history.
+- **Delegate + multi-approval (I-501/I-502).** Delegation keeps the card
+  `pending` under `task.delegatedTo`; partial approvals accumulate in
+  `StoredTask.approvals` with nonce rotation until the Nth commits.
+- **Web Push (I-701).** Subscriptions live in the caller's DO; a new
+  card's `createTaskCard` fans out RFC 8291 `aes128gcm` + VAPID via
+  WebCrypto, fire-and-forget. Dead subscriptions (404/410) are pruned.
+
 ## Known MVP deviations (tracked for Phase 3)
 
 - Inspect is tap-only; up-swipe is reserved because flutter_card_swiper

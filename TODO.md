@@ -20,46 +20,47 @@
 
 ## Next — 捌く量を減らす(P8)と、エージェントへの返事の質
 
-- [ ] **並び順を緊急順に** (I-123, I-206) — 今は新しい順固定
-- [ ] **サーバー側スヌーズ** (既知の逸脱) — `POST /api/v1/actions` に `snooze` アクションと `until`、
-      全端末で同期、DO alarm で再浮上
-- [ ] **カードの更新と取り下げ** (I-204, I-205) — `updateTaskCard` / `withdrawTask`、nonce の作り直し
-- [ ] **replyUrl の信頼性** (I-604, I-801) — 再試行(指数バックオフ、最大N回)、HMAC 署名ヘッダ、
-      最終失敗をカード履歴に表示。今は `deliverToAgent` が失敗をログに出すだけ
-- [ ] **まとめカード** (I-201, I-110) — `groupKey`、例外の自動切り出し、一括承認
-- [ ] **二段スワイプ** (I-101) — まず「承認+自動化を提案」までに留め、ルール保存は Later の I-807 と同時に
-- [ ] **Web キーボード拡充** (I-136) — 既存 ←/→/i/s に j/k/z/1-9/? を追加
-- [ ] **練習モード** (I-129) — 新しい操作を増やす前に入れておく
+(全項目完了 — 詳細は Done へ移動)
 
 ## Later — 広げる
 
-- [ ] 処理済みトレイ (I-120) と履歴・監査ログ (I-512)
-- [ ] Fleet タブ (I-603, I-122)
-- [ ] ピンチで俯瞰 / カードを裏返す / ドロップゾーン (I-105, I-107, I-108)
-- [ ] 二択カード・行単位の選択・カード上の値調整 (I-111, I-112, I-114)
-- [ ] 自動承認ルールと権限リース (I-304, I-807, I-602)
-- [ ] ラバースタンプ検知 (I-401) と おやすみ時間 (I-402)
-- [ ] 緊急停止 (I-403)
-- [ ] SDK と MCP サーバー (I-901, I-902)
-- [ ] QR ペアリング・端末ごとのトークン・ユーザーごとの DO (I-808, I-809)
-- [ ] PWA + Web Push (I-701)
-- [ ] 委任・二人承認 (I-501, I-502)
+(全項目完了 — 詳細は Done へ移動)
 
 ## Phase 3(既存ロードマップ)
 
-- [ ] iOS Live Activities / Dynamic Island(WidgetKit via MethodChannel、macOS/Xcode 環境待ち)
-- [ ] APNs / FCM プッシュ
-- [ ] マルチデバイス同期の磨き込み
+- [ ] iOS Live Activities / Dynamic Island(WidgetKit via MethodChannel — macOS/Xcode 環境待ちのため保留)
+- [ ] APNs / FCM ネイティブプッシュ(PWA Web Push I-701 は完了済み。ネイティブは Apple/Firebase クレデンシャル待ち)
+- [x] マルチデバイス同期の磨き込み (snapshot reconcile、own-echo デデュープ、revised カード更新アニメーション)
 
 ## 雑務・技術的負債
 
-- [ ] mobile: `flutter create` 後のプラットフォームフォルダをコミットするか方針を決める
-- [ ] mobile: `withOpacity` の非推奨警告(Flutter 3.27+ は `withValues`)
-- [ ] web/app.js(約700行)をモジュール分割するか検討(ゼロビルドは維持)
-- [ ] ペイロードのファジングテスト (I-909)
-- [ ] プロトコルのバージョン番号 (I-606) — Now の変更で v0 を逸脱し始めるので早めに
+- [x] mobile: `flutter create` 後のプラットフォームフォルダをコミットするか方針を決める (コミット方針決定: ios/android を追跡し、IDE 設定ファイルのみ除外)
+- [x] mobile: `withOpacity` の非推奨警告 (Flutter 3.27+ `withValues` 移行完了)
+- [x] web/app.js をモジュール分割 (1219行を 13本のネイティブ ES モジュールに分割、ゼロビルド維持)
+- [x] ペイロードのファジングテスト (I-909: vitest 18件 + flutter 5件)
+- [x] プロトコルのバージョン番号 (I-606: protocolVersion: 1 をカードおよび snapshot エンベロープに導入)
 
 ## Done
+
+- [x] **並び順を緊急順に** (I-123, I-206): `priority` スコア（severity + 期限近接 + confidence + 経過時間）算出と優先度降順ソート
+- [x] **サーバー側スヌーズ**: `POST /api/v1/actions` の `snooze` アクション、全端末 dismiss 同期、DO alarm での自動再浮上
+- [x] **カードの更新と取り下げ** (I-204, I-205): `POST /api/v1/tasks/{id}/update` (nonce 再発行 + revised:true) / `withdraw` (全端末 dismiss)
+- [x] **replyUrl の信頼性** (I-604, I-801): 指数バックオフ再試行 (最大5回) + HMAC-SHA256 署名ヘッダ、最終失敗を `deliveryFailed` SSE + `/state` に記録
+- [x] **まとめカード** (I-201, I-110): `groupKey` passthrough、`POST /api/v1/actions/bulk` 一括承認、例外の自動個別化、二本指スワイプ
+- [x] **二段スワイプ** (I-101): 奥まで引いて「承認+自動化を提案」「却下+ミュート」、触覚 selectionClick
+- [x] **Web キーボード拡充** (I-136): `j`/`k` 移動、`z` Undo、`1`〜`9` チップ選択、`?` ショートカット一覧、`Shift+→` 二段承認
+- [x] **練習モード** (I-129): オンボーディング用 5枚のダミーカード、設定画面から再演可能
+- [x] **処理済みトレイと履歴・監査ログ** (I-120, I-512): 下部帯、日別グループ化された履歴パネル、localStorage / SharedPreferences 永続化
+- [x] **Fleet タブ** (I-603, I-122): エージェント別の待ち件数レーン表示とスタックのフィルタリング
+- [x] **ピンチで俯瞰 / カードを裏返す / ドロップゾーン** (I-105, I-107, I-108): ピンチイン一覧タイル、ダブルタップで裏面コンテキスト表示、長押し四隅ドロップゾーン
+- [x] **二択カード・行単位の選択・カード上の値調整** (I-111, I-112, I-114): 上下スワイプの選択カード、DiffBox の行選択チェック、stepper / slider インライン値調整
+- [x] **自動承認ルールと権限リース** (I-304, I-807, I-602): `GET/PUT /api/v1/rules`、match / lease 条件判定、新規カードの enqueue 自動承認
+- [x] **ラバースタンプ検知とおやすみ時間** (I-401, I-402): 1秒未満の連続承認ロック、夜間の非クリティカルカード退避
+- [x] **緊急停止** (I-403): `POST /api/v1/pause` / `resume`、全端末赤バナー + 承認ロック
+- [x] **SDK と MCP サーバー** (I-901, I-902): TypeScript SDK, Python SDK, Stdio MCP サーバー, docs/sdk.md
+- [x] **QR ペアリング・端末ごとのトークン・ユーザーごとの DO** (I-808, I-809): `POST /api/v1/pair` / `redeem`、device:<sha256> トークン、user:<u> DO ルーティング
+- [x] **PWA + Web Push** (I-701): `manifest.webmanifest`, `sw.js`, WebCrypto RFC 8291 aes128gcm + VAPID 送信
+- [x] **委任・二人承認** (I-501, I-502): `action: "delegate"`、`requiredApprovals: 2` (1人目で nonce ローテ + progress、2人目で commit)
 
 - [x] **期限** (I-203): protocol に `expiresAt` / `onExpire`(approve/reject/escalate/drop、
       既定 drop、malformed は 400)。hub の統合 alarm に期限を追加 — approve/reject は

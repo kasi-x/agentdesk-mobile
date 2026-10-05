@@ -2,7 +2,7 @@
 import { el, clear } from './dom.js';
 import { state } from './store.js';
 import { renderComponent, orderedComponents } from './render.js';
-import { triage } from './actions.js';
+import { triage, approvalData } from './actions.js';
 
 export function openInspect(task) {
   state.inspectTask = task;
@@ -130,10 +130,9 @@ export function renderInspect() {
       const v = getter();
       if (v !== undefined && v !== null && v !== '') values[id] = v;
     }
-    const right = task.actions && task.actions.onSwipeRight;
-    const merged = Object.assign({}, (right && right.payload) || {}, values);
+    // Form values ride on top; row-select / editable extras join via approvalData.
     closeInspect();
-    triage(task, { actionName: 'approve', data: merged, source: 'inspect_form' });
+    triage(task, { actionName: 'approve', data: approvalData(task, values), source: 'inspect_form' });
   });
   const cancel = el('button', 'btn dim', 'キャンセル');
   cancel.type = 'button';

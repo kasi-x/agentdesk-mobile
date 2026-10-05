@@ -7,9 +7,12 @@
 //   node tools/mock-agent.mjs update [taskId] [--port 8799]
 //   node tools/mock-agent.mjs withdraw [taskId] [--port 8799]
 //   node tools/mock-agent.mjs result <taskId> [--wait 10]
+//   node tools/mock-agent.mjs pair [--device NAME] [--user USER]
+//   node tools/mock-agent.mjs pair <code>
 //
 // Env: HUB_URL (default http://127.0.0.1:8787), AGENT_TOKEN (default
-// dev-agent-token), REPLY_SIGNING_SECRET (defaults to AGENT_TOKEN),
+// dev-agent-token), CLIENT_TOKEN (default dev-client-token),
+// REPLY_SIGNING_SECRET (defaults to AGENT_TOKEN),
 // CALLBACK_PORT (default 8799).
 
 import crypto from "node:crypto";
@@ -17,6 +20,7 @@ import http from "node:http";
 
 const HUB_URL = process.env.HUB_URL ?? "http://127.0.0.1:8787";
 const AGENT_TOKEN = process.env.AGENT_TOKEN ?? "dev-agent-token";
+const CLIENT_TOKEN = process.env.CLIENT_TOKEN ?? "dev-client-token";
 const REPLY_SECRET = process.env.REPLY_SIGNING_SECRET ?? AGENT_TOKEN;
 const CALLBACK_PORT = Number(process.env.CALLBACK_PORT ?? 8799);
 
@@ -30,6 +34,12 @@ const positional = () =>
   process.argv[3] !== undefined && !process.argv[3].startsWith("--")
     ? process.argv[3]
     : undefined;
+
+/** Value of a `--flag value` argument, or undefined. */
+const flagValue = (flag) => {
+  const i = process.argv.indexOf(flag);
+  return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : undefined;
+};
 
 const shortId = () => `task_${crypto.randomUUID().slice(0, 8)}`;
 
@@ -201,6 +211,46 @@ function sampleCards(callbackBase) {
       expiresAt: new Date(Date.now() + 90 * 1000).toISOString(),
       onExpire: "drop",
     },
+    {
+      // I-111: two-choice card — up picks 新幹線, down picks 飛行機.
+      type: "createTaskCard",
+      taskId: shortId(),
+      agent: { name: "Travel Agent" },
+      confidence: 0.81,
+      severity: "info",
+      summary: "出張の移動手段を選んでください",
+      decisionKind: "choose",
+      choices: [
+        { id: "shinkansen", label: "新幹線 (2h, ¥14,000)" },
+        { id: "flight", label: "飛行機 (1h, ¥22,000)" },
+      ],
+      replyUrl: `${callbackBase}/callback/travel`,
+      components: [
+        {
+          id: "compare",
+          component: "DiffBox",
+          properties: {
+            title: "移動手段",
+            before: "新幹線 ¥14,000",
+            after: "飛行機 ¥22,000",
+            highlight: "info",
+          },
+        },
+      ],
+      actions: {
+        onSwipeUp: {
+          actionName: "pick_first",
+          label: "新幹線",
+          payload: { decision: "PICK", choice: "shinkansen" },
+        },
+        onSwipeDown: {
+          actionName: "pick_second",
+          label: "飛行機",
+          payload: { decision: "PICK", choice: "flight" },
+        },
+        onSwipeLeft: { actionName: "reject", label: "却下", payload: { decision: "DECLINE" } },
+      },
+    },
   ];
 }
 
@@ -308,6 +358,55 @@ async function result(taskId, wait) {
   }
 }
 
+/**
+ * I-808 pairing demo. Without a code it mints one (client auth); with a
+ * code it redeems it into a device token (no auth — possession of the
+ * code is the credential, exactly like a phone scanning a QR).
+ */
+async function pair(code, device, user) {
+  if (code) {
+    const { status, text } = await hub("/api/v1/pair/redeem", {
+      body: { code },
+      token: "",
+    });
+    console.log(`redeem  ${status}`);
+    try {
+      const body = JSON.parse(text);
+      console.log(JSON.stringify(body, null, 2));
+      if (status === 200 && body.token) {
+        console.log(
+          `\n🔑 device token for user "${body.user}" — use it as the client Bearer token:\n` +
+          `  export DEVICE_TOKEN=${body.token}\n` +
+          `  curl -H "Authorization: Bearer $DEVICE_TOKEN" ${HUB_URL}/api/v1/state`,
+        );
+      }
+    } catch {
+      console.log(text);
+    }
+    return;
+  }
+  const { status, text } = await hub("/api/v1/pair", {
+    body: {
+      ...(device ? { device } : {}),
+      ...(user ? { user } : {}),
+    },
+    token: CLIENT_TOKEN,
+  });
+  console.log(`pair  ${status}`);
+  try {
+    const body = JSON.parse(text);
+    console.log(JSON.stringify(body, null, 2));
+    if (status === 200 && body.code) {
+      console.log(
+        `\n📱 show this to the phone (QR encodes the url), then run:\n` +
+        `  node tools/mock-agent.mjs pair ${body.code}`,
+      );
+    }
+  } catch {
+    console.log(text);
+  }
+}
+
 /** I-801: verify the hub's `X-AgentDesk-Signature: t=<ts>,v1=<hex>` header. */
 function signatureBadge(req, raw) {
   const header = req.headers["x-agentdesk-signature"];
@@ -359,9 +458,11 @@ if (command === "listen") {
   await withdraw(positional(), argPort("--port", CALLBACK_PORT));
 } else if (command === "result") {
   await result(positional(), argPort("--wait", 0));
+} else if (command === "pair") {
+  await pair(positional(), flagValue("--device"), flagValue("--user"));
 } else {
   console.error(
-    "usage: node tools/mock-agent.mjs <send|listen|update|withdraw|result> [args] [--port 8799]",
+    "usage: node tools/mock-agent.mjs <send|listen|update|withdraw|result|pair> [args] [--port 8799]",
   );
   process.exit(1);
 }

@@ -18,7 +18,152 @@ abstract class HubApi {
   Future<UndoResult> undo({required String taskId, required String nonce});
 }
 
-class HttpHubApi implements HubApi {
+/// One item's outcome inside a `POST /api/v1/actions/bulk` response.
+class BulkItemResult {
+  final String taskId;
+  final bool ok;
+
+  /// Hub error code when `ok` is false (`bad_nonce`, …).
+  final String? error;
+
+  const BulkItemResult({required this.taskId, required this.ok, this.error});
+}
+
+class BulkResult {
+  final List<BulkItemResult> results;
+
+  /// True when the request never reached the hub (offline).
+  final bool networkError;
+
+  const BulkResult({this.results = const <BulkItemResult>[], this.networkError = false});
+
+  int get failedCount => results.where((r) => !r.ok).length;
+}
+/// One auto-approval rule (I-304/I-807): the client mirror of `Rule` in
+/// `backend/src/protocol.ts`. Rules match NEW pending cards only — the hub
+/// approves matches with `source: "auto_rule"` against the rule's lease.
+class AutoApprovalRule {
+  final String id;
+
+  /// Substring of `agent.name`; null = any agent.
+  final String? agent;
+
+  /// Allowed severities; empty = any.
+  final List<String> severity;
+
+  /// Maximum `impact.cost.amount`; null = any.
+  final double? maxCost;
+
+  /// Substring of `groupKey`; null = any.
+  final String? groupKey;
+
+  /// ISO 8601 instant after which the rule stops firing; null = no expiry.
+  final String? leaseUntil;
+
+  /// Maximum auto-approvals before the rule stops; null = unlimited.
+  final int? leaseMaxCount;
+
+  final bool enabled;
+
+  const AutoApprovalRule({
+    required this.id,
+    this.agent,
+    this.severity = const <String>[],
+    this.maxCost,
+    this.groupKey,
+    this.leaseUntil,
+    this.leaseMaxCount,
+    this.enabled = true,
+  });
+
+  factory AutoApprovalRule.fromJson(Map<String, dynamic> raw) {
+    final match = raw['match'] is Map
+        ? Map<String, dynamic>.from(raw['match'] as Map)
+        : const <String, dynamic>{};
+    final lease = raw['lease'] is Map
+        ? Map<String, dynamic>.from(raw['lease'] as Map)
+        : null;
+    final severityRaw = match['severity'];
+    final maxCostRaw = match['maxCost'];
+    final maxCountRaw = lease?['maxCount'];
+    return AutoApprovalRule(
+      id: '${raw['id'] ?? ''}',
+      agent: match['agent'] is String ? match['agent'] : null,
+      severity:
+          severityRaw is List ? severityRaw.whereType<String>().toList() : const <String>[],
+      maxCost: maxCostRaw is num ? maxCostRaw.toDouble() : null,
+      groupKey: match['groupKey'] is String ? match['groupKey'] as String : null,
+      leaseUntil: lease?['until'] is String ? lease!['until'] : null,
+      leaseMaxCount: maxCountRaw is num ? maxCountRaw.toInt() : null,
+      enabled: raw['enabled'] is bool ? raw['enabled'] as bool : true,
+    );
+  }
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'id': id,
+        'match': <String, dynamic>{
+          if (agent != null) 'agent': agent,
+          if (severity.isNotEmpty) 'severity': severity,
+          if (maxCost != null) 'maxCost': maxCost,
+          if (groupKey != null) 'groupKey': groupKey,
+        },
+        if (leaseUntil != null || leaseMaxCount != null)
+          'lease': <String, dynamic>{
+            if (leaseUntil != null) 'until': leaseUntil,
+            if (leaseMaxCount != null) 'maxCount': leaseMaxCount,
+          },
+        'enabled': enabled,
+      };
+
+  AutoApprovalRule copyWith({bool? enabled}) => AutoApprovalRule(
+        id: id,
+        agent: agent,
+        severity: severity,
+        maxCost: maxCost,
+        groupKey: groupKey,
+        leaseUntil: leaseUntil,
+        leaseMaxCount: leaseMaxCount,
+        enabled: enabled ?? this.enabled,
+      );
+}
+
+/// Rules surface: `GET/PUT /api/v1/rules` (whole-list replace). Kept
+/// separate from [HubApiV2] so existing fakes stay source-compatible;
+/// callers probe with `api is HubRulesApi` and render read-only offline.
+abstract class HubRulesApi {
+  /// Returns null when the list could not be read (offline / hub error).
+  Future<List<AutoApprovalRule>?> fetchRules();
+
+  /// Replaces the whole rule set; false when the save did not reach the hub.
+  Future<bool> saveRules(List<AutoApprovalRule> rules);
+}
+
+/// Wave-2 server surface: server-side snooze, delegation and bulk triage
+/// (docs/protocol.md). Kept separate from [HubApi] so existing
+/// implementations and tests stay source-compatible; callers probe with
+/// `api is HubApiV2` and degrade to local handling when absent.
+abstract class HubApiV2 {
+  /// `POST /actions {action:"snooze", until}` — hides the card on every
+  /// device until [until] without consuming the nonce.
+  Future<ActionSendResult> snooze({
+    required String taskId,
+    required String nonce,
+    required DateTime until,
+  });
+
+  /// `POST /actions {action:"delegate", data:{to}}` — the card stays
+  /// pending and the hub records the assignee.
+  Future<ActionSendResult> delegate({
+    required String taskId,
+    required String nonce,
+    required String to,
+  });
+
+  /// `POST /actions/bulk` — each item CASed independently (I-201).
+  Future<BulkResult> bulk(List<TriageActionReply> actions);
+}
+
+class HttpHubApi implements HubApi, HubApiV2, HubRulesApi {
   final HubConfig config;
   final http.Client _client;
 
@@ -91,6 +236,152 @@ class HttpHubApi implements HubApi {
       return UndoResult.networkError;
     } on http.ClientException {
       return UndoResult.networkError;
+    }
+  }
+
+  @override
+  Future<ActionSendResult> snooze({
+    required String taskId,
+    required String nonce,
+    required DateTime until,
+  }) async {
+    try {
+      final res = await _client
+          .post(
+            _uri('/actions'),
+            headers: _headers,
+            body: jsonEncode(<String, dynamic>{
+              'taskId': taskId,
+              'nonce': nonce,
+              'action': 'snooze',
+              'until': until.toUtc().toIso8601String(),
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (res.statusCode == 200) return ActionSendResult.sent;
+      if (res.statusCode == 409) return ActionSendResult.conflict;
+      return ActionSendResult.rejected;
+    } on TimeoutException {
+      return ActionSendResult.networkError;
+    } on SocketException {
+      return ActionSendResult.networkError;
+    } on http.ClientException {
+      return ActionSendResult.networkError;
+    }
+  }
+
+  @override
+  Future<ActionSendResult> delegate({
+    required String taskId,
+    required String nonce,
+    required String to,
+  }) async {
+    try {
+      final res = await _client
+          .post(
+            _uri('/actions'),
+            headers: _headers,
+            body: jsonEncode(<String, dynamic>{
+              'taskId': taskId,
+              'nonce': nonce,
+              'action': 'delegate',
+              'data': <String, dynamic>{'to': to},
+              'source': ActionSource.delegate,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (res.statusCode == 200) return ActionSendResult.sent;
+      if (res.statusCode == 409) return ActionSendResult.conflict;
+      return ActionSendResult.rejected;
+    } on TimeoutException {
+      return ActionSendResult.networkError;
+    } on SocketException {
+      return ActionSendResult.networkError;
+    } on http.ClientException {
+      return ActionSendResult.networkError;
+    }
+  }
+
+  @override
+  Future<BulkResult> bulk(List<TriageActionReply> actions) async {
+    try {
+      final res = await _client
+          .post(
+            _uri('/actions/bulk'),
+            headers: _headers,
+            body: jsonEncode(<String, dynamic>{
+              'actions': [
+                for (final reply in actions)
+                  <String, dynamic>{
+                    'taskId': reply.taskId,
+                    'nonce': reply.nonce,
+                    'action': reply.actionName,
+                    'source': reply.source,
+                    if (reply.data.isNotEmpty) 'data': reply.data,
+                  },
+              ],
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
+      if (res.statusCode != 200) return const BulkResult(networkError: false);
+      final body = jsonDecode(utf8.decode(res.bodyBytes));
+      if (body is! Map || body['results'] is! List) {
+        return const BulkResult();
+      }
+      return BulkResult(
+        results: [
+          for (final item in body['results'] as List)
+            if (item is Map)
+              BulkItemResult(
+                taskId: '${item['taskId'] ?? ''}',
+                ok: item['ok'] == true,
+                error: item['error'] is String ? item['error'] as String : null,
+              ),
+        ],
+      );
+    } on TimeoutException {
+      return const BulkResult(networkError: true);
+    } on SocketException {
+      return const BulkResult(networkError: true);
+    } on http.ClientException {
+      return const BulkResult(networkError: true);
+    }
+  }
+
+  @override
+  Future<List<AutoApprovalRule>?> fetchRules() async {
+    try {
+      final res = await _client
+          .get(_uri('/rules'), headers: _headers)
+          .timeout(const Duration(seconds: 10));
+      if (res.statusCode != 200) return null;
+      final body = jsonDecode(utf8.decode(res.bodyBytes));
+      if (body is! Map || body['rules'] is! List) return null;
+      return <AutoApprovalRule>[
+        for (final item in body['rules'] as List)
+          if (item is Map)
+            AutoApprovalRule.fromJson(Map<String, dynamic>.from(item)),
+      ];
+    } on Exception {
+      return null;
+    }
+  }
+
+  @override
+  Future<bool> saveRules(List<AutoApprovalRule> rules) async {
+    try {
+      final res = await _client
+          .put(
+            _uri('/rules'),
+            headers: _headers,
+            body: jsonEncode(<String, dynamic>{
+              'rules': [for (final rule in rules) rule.toJson()],
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+      return res.statusCode == 200;
+    } on Exception {
+      return false;
     }
   }
 }

@@ -2,12 +2,16 @@
  * Every payload string reaches the DOM only via textContent/createElement
  * (NFR-2.1) — never innerHTML, never eval. */
 import { el, clear } from './dom.js';
-import { state, visibleStack } from './store.js';
-import { riskLevel, timeAgo } from './util.js';
-import { triage, snooze, selectIndex } from './actions.js';
+import { state, visibleStack, visibleUnits, parkedCount, SNOOZE_OPTIONS } from './store.js';
+import { riskLevel, timeAgo, fmtEditDateTime, isChooseTask, snoozeUntilLabel } from './util.js';
+import {
+  triage, snooze, selectIndex, approve, choose, bulkApprove, delegate,
+  rowSelection, toggleRow, editedValue,
+} from './actions.js';
 import { openInspect } from './inspect.js';
 import { renderTray } from './history.js';
 import { renderFleet } from './fleet.js';
+import { renderStampBanner } from './stamp.js';
 
 /* Animate UI counting-number, translated: tween the pending count so a
  * batch of dismissals ticks down instead of jumping. */
@@ -202,9 +206,33 @@ export function renderComponent(comp, task) {
       const pairOpts = { durationMin: Number(p.duration) };
       renderValuePair(wrap, null, p.before, p.after, pairOpts);
       if (Array.isArray(p.rows)) {
-        for (const r of p.rows) {
-          if (!r || typeof r !== 'object') continue;
-          renderValuePair(wrap, r.label || null, r.before, r.after, pairOpts);
+        const objects = p.rows.filter((r) => r && typeof r === 'object');
+        if (p.selectable && comp.id !== undefined && objects.length > 0) {
+          // Row-select: DiffBox rows are toggleable checkboxes — the approve
+          // payload carries the remaining ids as `acceptedRows`, omitted
+          // when everything stays checked. Defaults to all-selected.
+          const ids = objects.map((r, i) =>
+            (r.id !== undefined && r.id !== null ? String(r.id) : String(i)));
+          const sel = rowSelection(task.taskId, comp.id, ids);
+          objects.forEach((r, i) => {
+            const btn = el('button', 'diffrow-check' + (sel.has(ids[i]) ? ' on' : ''));
+            btn.type = 'button';
+            btn.setAttribute('aria-pressed', String(sel.has(ids[i])));
+            btn.title = sel.has(ids[i]) ? '承認に含む' : '承認から外す';
+            btn.appendChild(el('span', 'diffrow-box', sel.has(ids[i]) ? '✓' : ''));
+            const body = el('span', 'diffrow-body');
+            renderValuePair(body, r.label || null, r.before, r.after, pairOpts);
+            btn.appendChild(body);
+            btn.addEventListener('click', () => {
+              toggleRow(task.taskId, comp.id, ids[i], ids);
+              render();
+            });
+            wrap.appendChild(btn);
+          });
+        } else {
+          for (const r of objects) {
+            renderValuePair(wrap, r.label || null, r.before, r.after, pairOpts);
+          }
         }
       }
       if (typeof p.inline === 'string' && p.inline) {
@@ -307,6 +335,7 @@ export function renderCard(task, { focused = false } = {}) {
   }
   header.appendChild(avatar);
   header.appendChild(el('span', 'card-agent', agent.name || 'Agent'));
+  if (task.delegatedTo) header.appendChild(el('span', 'deleg-badge', `→${task.delegatedTo}`));
   header.appendChild(el('span', `sev-dot ${sev === 'info' ? '' : sev}`.trim()));
   const timeWrap = el('span', 'card-meta-time', timeAgo(task.createdAt));
   header.appendChild(timeWrap);
@@ -341,6 +370,16 @@ export function renderCard(task, { focused = false } = {}) {
     }
   }
 
+  // Wave-2 status line (I-604/I-902, display-only): multi-approval progress + delivery trouble.
+  const req = Number(task.requiredApprovals || 1);
+  const got = Number(state.approvalProgress[task.taskId] || 0);
+  if (req > 1 && got > 0) {
+    inner.appendChild(el('div', 'approve-progress', `承認 ${got}/${req}`));
+  }
+  if (state.deliveryFailed.has(task.taskId)) {
+    inner.appendChild(el('div', 'delivery-warn', '⚠ エージェントに返信できませんでした'));
+  }
+
   // 詳細を見る — 結果/理由/誰が/参加者/出典/金額/注意点 expand downward.
   const hasContext = !!(ctx && (ctx.reasoning || ctx.requester?.name ||
     (Array.isArray(ctx.participants) && ctx.participants.length) || ctx.source?.label));
@@ -373,22 +412,104 @@ export function renderCard(task, { focused = false } = {}) {
   }
 
   card.appendChild(inner);
+  // Choose cards (decisionKind 'choose'): two stacked options — A on top,
+  // B below. ArrowUp/ArrowDown pick directly; → is disabled; ← still rejects.
+  const chooseMode = isChooseTask(task);
+  const choices = chooseMode ? task.choices : [];
+  if (chooseMode) {
+    const bind = (i) => (task.actions || {})[i === 0 ? 'onSwipeUp' : 'onSwipeDown'];
+    const pick = (i) => choose(task, i);
+    const box = el('div', 'choose-options');
+    choices.slice(0, 2).forEach((c, i) => {
+      const b = el('button', 'choose-opt' + (i === 0 ? ' top' : ' bottom'));
+      b.type = 'button';
+      const kbd = el('span', 'choose-key', i === 0 ? '↑ A' : '↓ B');
+      b.appendChild(kbd);
+      b.appendChild(el('span', 'choose-label', (c && c.label) || `選択肢${i + 1}`));
+      b.disabled = !!state.paused;
+      b.addEventListener('click', () => pick(i));
+      box.appendChild(b);
+    });
+    card.appendChild(box);
+  }
 
-  // Actions row: two decisions + snooze. 承認 carries the weight.
+  // Editable hint (I-114): number stepper / datetime ±step controls inline.
+  // The value rides the approve payload as data.edited.
+  if (task.editable && task.editable.kind && !chooseMode) {
+    const e = task.editable;
+    const step = Number.isFinite(Number(e.step)) && Number(e.step) > 0 ? Number(e.step) : 1;
+    const wrap = el('div', 'editrow');
+    if (e.kind === 'number') {
+      const dec = el('button', 'edit-step', '−');
+      const inc = el('button', 'edit-step', '＋');
+      dec.type = inc.type = 'button';
+      const val = el('span', 'edit-value', String(editedValue(task)));
+      const bump = (d) => {
+        let v = Number(editedValue(task)) || 0;
+        v += d * step;
+        if (Number.isFinite(Number(e.min))) v = Math.max(Number(e.min), v);
+        if (Number.isFinite(Number(e.max))) v = Math.min(Number(e.max), v);
+        editedValue(task, v);
+        val.textContent = String(v);
+      };
+      dec.addEventListener('click', () => bump(-1));
+      inc.addEventListener('click', () => bump(1));
+      wrap.append(dec, val, inc);
+    } else if (e.kind === 'datetime') {
+      const span = Number(step);
+      const back = el('button', 'edit-step', '−');
+      const fwd = el('button', 'edit-step', '＋');
+      back.type = fwd.type = 'button';
+      back.title = `−${span}分`;
+      fwd.title = `＋${span}分`;
+      const val = el('span', 'edit-value', fmtEditDateTime(editedValue(task)));
+      const shift = (d) => {
+        const cur = Date.parse(editedValue(task)) || Date.now();
+        const next = new Date(cur + d * span * 60000).toISOString();
+        editedValue(task, next);
+        val.textContent = fmtEditDateTime(next);
+      };
+      back.addEventListener('click', () => shift(-1));
+      fwd.addEventListener('click', () => shift(1));
+      wrap.append(back, val, fwd);
+    }
+    if (wrap.children.length) card.appendChild(wrap);
+  }
+
+  // Actions row: two decisions + snooze + delegate. 承認 carries the weight.
   const actions = el('div', 'card-actions');
   const right = task.actions && task.actions.onSwipeRight;
   const left = task.actions && task.actions.onSwipeLeft;
 
-  const approve = el('button', 'btn ok', `${(right && right.label) || 'Approve'}`);
-  approve.type = 'button';
-  approve.addEventListener('click', () =>
-    triage(task, { actionName: (right && right.actionName) || 'approve', data: right && right.payload, source: 'web_ui' }),
-  );
+  const approveBtn = el('button', 'btn ok', `${(right && right.label) || 'Approve'}`);
+  approveBtn.type = 'button';
+  approveBtn.addEventListener('click', () => {
+    // I-401: approve() arms on the first click while gated (returns false)
+    // — the armed label is local so a re-render never wipes it mid-gesture.
+    const sent = approve(task, { source: 'web_ui' });
+    if (!sent) {
+      approveBtn.classList.add('armed');
+      approveBtn.textContent = 'もう一度で承認';
+      clearTimeout(approveBtn._armT);
+      approveBtn._armT = setTimeout(() => {
+        if (state.stampArm === task.taskId) {
+          state.stampArm = null;
+          render();
+        }
+      }, 4000);
+    }
+  });
+  // Choose cards use ↑/↓ — → is disabled.
+  if (chooseMode) {
+    approveBtn.disabled = true;
+    approveBtn.classList.add('paused');
+    approveBtn.title = '↑↓ で選択してください';
+  }
   // Emergency stop (I-403): no approvals while the hub is paused.
   if (state.paused) {
-    approve.disabled = true;
-    approve.classList.add('paused');
-    approve.title = '緊急停止中 — 承認は無効です';
+    approveBtn.disabled = true;
+    approveBtn.classList.add('paused');
+    approveBtn.title = '緊急停止中 — 承認は無効です';
   }
 
   // Reject reason chips (I-118): when the agent supplied candidates,
@@ -428,54 +549,115 @@ export function renderCard(task, { focused = false } = {}) {
   } else {
     reject.addEventListener('click', () => sendReject(null));
   }
-  actions.appendChild(approve);
+  actions.appendChild(approveBtn);
 
   // Locked (critical + irreversible): approve becomes a hold-to-confirm
   // ring (I-102/I-103). Pointer press fills it; early release cancels.
   if (riskLevel(task) === 'locked') {
-    approve.textContent = `${(right && right.label) || '長押しで承認'}`;
-    approve.classList.add('hold');
+    approveBtn.textContent = `${(right && right.label) || '長押しで承認'}`;
+    approveBtn.classList.add('hold');
     let holdTimer = null;
     let progress = null;
     const HOLD_MS = 1200;
-    approve.addEventListener('pointerdown', (e) => {
+    approveBtn.addEventListener('pointerdown', (e) => {
       e.preventDefault();
-      approve.classList.add('holding');
+      approveBtn.classList.add('holding');
       progress = el('span', 'hold-progress');
-      approve.appendChild(progress);
+      approveBtn.appendChild(progress);
       progress.animate(
         [{ transform: 'scaleX(0)' }, { transform: 'scaleX(1)' }],
         { duration: HOLD_MS, fill: 'forwards' },
       );
       holdTimer = setTimeout(() => {
         cleanup();
-        triage(task, {
-          actionName: (right && right.actionName) || 'approve',
-          data: right && right.payload,
-          source: 'hold_confirm',
-        });
+        approve(task, { source: 'hold_confirm' });
       }, HOLD_MS);
     });
     const cleanup = () => {
       clearTimeout(holdTimer);
       holdTimer = null;
-      approve.classList.remove('holding');
+      approveBtn.classList.remove('holding');
       progress?.remove();
       progress = null;
     };
-    approve.addEventListener('pointerup', cleanup);
-    approve.addEventListener('pointerleave', cleanup);
-    approve.addEventListener('pointercancel', cleanup);
-    approve.addEventListener('contextmenu', (e) => e.preventDefault());
+    approveBtn.addEventListener('pointerup', cleanup);
+    approveBtn.addEventListener('pointerleave', cleanup);
+    approveBtn.addEventListener('pointercancel', cleanup);
+    approveBtn.addEventListener('contextmenu', (e) => e.preventDefault());
   }
-
+  // Snooze menu (I-702): +1h default, 明日朝 option — server-side first,
+  // local move-to-tail fallback when the POST fails.
   const snz = el('button', 'btn dim', '後で');
   snz.type = 'button';
-  snz.addEventListener('click', () => snooze(task));
+  snz.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = snz.parentElement.querySelector('.snooze-menu');
+    if (open) {
+      open.remove();
+      return;
+    }
+    closePopups();
+    const menu = el('div', 'snooze-menu');
+    for (const opt of SNOOZE_OPTIONS) {
+      const item = el('button', 'snooze-opt', opt.label);
+      item.type = 'button';
+      item.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        menu.remove();
+        snooze(task, opt.until());
+      });
+      menu.appendChild(item);
+    }
+    snz.parentElement.appendChild(menu);
+    setTimeout(() => document.addEventListener('click', function once() {
+      menu.remove();
+    }, { once: true }), 0);
+  });
 
-  actions.append(reject, snz, approve);
+  // Delegate (I-703): 「回す」 opens an inline target field inside the card;
+  // the hub only tags delegatedTo — the card stays pending.
+  const dlg = el('button', 'btn ghost', '回す');
+  dlg.type = 'button';
+  dlg.title = '他の人に回す';
+  dlg.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closePopups();
+    const row = el('div', 'delegate-row');
+    row.appendChild(el('span', 'delegate-label', '回す先:'));
+    const input = el('input', 'delegate-input');
+    input.type = 'text';
+    input.placeholder = '名前 / チーム';
+    input.value = task.delegatedTo || '';
+    row.appendChild(input);
+    const send = el('button', 'btn primary sm', '回す');
+    send.type = 'button';
+    const cancel = el('button', 'btn dim sm', '取消');
+    cancel.type = 'button';
+    const submit = () => {
+      const to = input.value.trim();
+      if (to) delegate(task, to);
+      row.remove();
+    };
+    send.addEventListener('click', (ev) => { ev.stopPropagation(); submit(); });
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') submit();
+      if (ev.key === 'Escape') row.remove();
+      ev.stopPropagation();
+    });
+    cancel.addEventListener('click', (ev) => { ev.stopPropagation(); row.remove(); });
+    row.append(send, cancel);
+    actions.appendChild(row);
+    input.focus();
+  });
+
+  actions.append(reject, snz, dlg, approveBtn);
   card.appendChild(actions);
   return card;
+}
+
+/** Close transient card popups (snooze menu / delegate row) before opening another. */
+function closePopups() {
+  document.querySelectorAll('.snooze-menu, .delegate-row').forEach((n) => n.remove());
 }
 
 /* 詳細パネル: 理由 / 誰が / 参加者 / 出典 / 金額 / 注意点 (P1: 裏面)。
@@ -613,6 +795,8 @@ function buildDetailsList(task, { ctx, impact, reasons, movedTexts = [] }) {
   return list;
 }
 
+const groupOpen = new Set(); // groupKeys expanded in the stack (I-201)
+
 function renderMini(task, index) {
   const mini = el('div', 'mini' + (state.kbActive && state.selected === index ? ' kb-focus' : ''));
   mini.setAttribute('role', 'button');
@@ -623,6 +807,7 @@ function renderMini(task, index) {
   mini.appendChild(el('span', 'mini-agent', (task.agent && task.agent.name) || 'Agent'));
   mini.appendChild(el('span', 'mini-summary', task.summary || ''));
   if (state.snoozedIds.has(task.taskId)) mini.appendChild(el('span', 'mini-badge info', 'snoozed'));
+  if (task.delegatedTo) mini.appendChild(el('span', 'deleg-badge', `→${task.delegatedTo}`));
   const pick = () => selectIndex(index);
   mini.addEventListener('click', pick);
   mini.addEventListener('keydown', (e) => {
@@ -634,26 +819,135 @@ function renderMini(task, index) {
   return mini;
 }
 
+/**
+ * A groupKey bundle (I-201): 「N件まとめ」 + representative summary + an
+ * expand toggle listing members + 一括承認 for the whole bundle.
+ * Exceptions never join a bundle (they render as full cards at their own
+ * position), so bulk here only ever covers ordinary cards.
+ */
+function renderGroupCard(members, { focused = false } = {}) {
+  const first = members[0];
+  const card = el('div', 'card group-card' + (focused ? ' kb-focus' : ''));
+  const inner = el('div', 'card-inner');
+
+  inner.appendChild(el('div', 'group-count', `${members.length}件まとめ`));
+  inner.appendChild(el('div', 'summary', first.summary || ''));
+  const agents = [...new Set(members.map((t) => (t.agent && t.agent.name) || 'Agent'))];
+  inner.appendChild(el('div', 'group-agents', agents.join(' · ')));
+  card.appendChild(inner);
+
+  const key = first.groupKey;
+  const open = groupOpen.has(key);
+  const toggle = el('button', 'details-toggle group-toggle');
+  toggle.type = 'button';
+  const label = el('span', 'details-label', open ? '明細を隠す' : '明細を見る');
+  const chev = el('span', 'details-chev');
+  toggle.append(label, chev);
+  toggle.addEventListener('click', () => {
+    if (groupOpen.has(key)) groupOpen.delete(key);
+    else groupOpen.add(key);
+    render();
+  });
+  card.appendChild(toggle);
+
+  if (open) {
+    const list = el('div', 'group-members');
+    for (const t of members) {
+      const row = el('button', 'group-member');
+      row.type = 'button';
+      row.appendChild(el('span', 'mini-agent', (t.agent && t.agent.name) || 'Agent'));
+      row.appendChild(el('span', 'mini-summary', t.summary || ''));
+      row.addEventListener('click', () => openInspect(t));
+      list.appendChild(row);
+    }
+    card.appendChild(list);
+  }
+
+  const actions = el('div', 'card-actions');
+  const bulk = el('button', 'btn ok', `一括承認 (${members.length}件)`);
+  bulk.type = 'button';
+  if (state.paused) {
+    bulk.disabled = true;
+    bulk.classList.add('paused');
+    bulk.title = '緊急停止中 — 承認は無効です';
+  }
+  bulk.addEventListener('click', () => bulkApprove(members));
+  actions.appendChild(bulk);
+  card.appendChild(actions);
+  return card;
+}
+
+function renderGroupMini(key, members, index) {
+  const mini = el('div', 'mini group-mini' +
+    (state.kbActive && state.selected === index ? ' kb-focus' : ''));
+  mini.setAttribute('role', 'button');
+  mini.tabIndex = 0;
+  mini.title = `${members.length}件まとめ — 選択`;
+  mini.appendChild(el('span', 'mini-badge group', `${members.length}件`));
+  mini.appendChild(el('span', 'mini-summary', members[0].summary || ''));
+  const pick = () => selectIndex(index);
+  mini.addEventListener('click', pick);
+  mini.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      pick();
+    }
+  });
+  return mini;
+}
+
+/** Header chips: server snooze count + quiet-hours parked count. */
+export function renderChips() {
+  const snoozed = document.getElementById('snoozed-chip');
+  if (snoozed) {
+    const items = state.serverSnoozed;
+    if (items.length === 0) {
+      snoozed.hidden = true;
+    } else {
+      snoozed.hidden = false;
+      snoozed.textContent = `あとで ${items.length}`;
+      const next = items
+        .map((s) => Date.parse(s.until))
+        .filter((t) => Number.isFinite(t))
+        .sort((a, b) => a - b)[0];
+      snoozed.title = next
+        ? `次は ${snoozeUntilLabel(new Date(next).toISOString())} に再表示`
+        : 'サーバーでスヌーズ中';
+    }
+  }
+  const quiet = document.getElementById('quiet-chip');
+  if (quiet) {
+    const n = parkedCount();
+    quiet.hidden = n === 0;
+    if (n > 0) {
+      quiet.textContent = `おやすみ中 ${n}`;
+      quiet.title = `おやすみ時間中は重要でないカードを保留します (${state.quiet.start}〜${state.quiet.end})`;
+    }
+  }
+}
+
 export function render() {
   const stackEl = document.getElementById('stack');
   if (!stackEl) return;
   clear(stackEl);
 
-  const vis = visibleStack();
-  if (state.selected >= vis.length) state.selected = vis.length ? vis.length - 1 : 0;
+  const units = visibleUnits();
+  if (state.selected >= units.length) state.selected = units.length ? units.length - 1 : 0;
   if (state.selected < 0) state.selected = 0;
 
   const count = document.getElementById('pending-count');
   if (count) {
-    if (state.stack.length) {
+    if (visibleStack().length) {
       count.hidden = false;
-      setPendingCount(state.stack.length);
+      setPendingCount(visibleStack().length);
     } else {
       count.hidden = true;
     }
   }
+  renderChips();
+  renderStampBanner();
 
-  if (!vis.length) {
+  if (!units.length) {
     const empty = el('div', 'empty');
     empty.appendChild(el('div', '', state.fleet ? `${state.fleet} に未処理はありません` : 'すべてのタスクが処理済み'));
     empty.appendChild(el('div', '',
@@ -664,15 +958,28 @@ export function render() {
     return;
   }
 
-  stackEl.appendChild(renderCard(vis[0], { focused: state.kbActive && state.selected === 0 }));
+  const [top, ...rest] = units;
+  stackEl.appendChild(renderUnit(top, state.kbActive && state.selected === 0));
 
-  if (vis.length > 1) {
+  if (rest.length > 0) {
     const queue = el('div', 'queue');
-    queue.appendChild(el('div', 'queue-label', `残り ${vis.length - 1} 件`));
-    vis.slice(1).forEach((t, idx) => queue.appendChild(renderMini(t, idx + 1)));
+    queue.appendChild(el('div', 'queue-label', `残り ${rest.length} 件`));
+    rest.forEach((u, idx) => queue.appendChild(renderUnitMini(u, idx + 1)));
     stackEl.appendChild(queue);
   }
 
   renderTray();
   renderFleet();
+}
+
+function renderUnit(unit, focused) {
+  return unit.type === 'group'
+    ? renderGroupCard(unit.members, { focused })
+    : renderCard(unit.task, { focused });
+}
+
+function renderUnitMini(unit, index) {
+  return unit.type === 'group'
+    ? renderGroupMini(unit.key, unit.members, index)
+    : renderMini(unit.task, index);
 }
