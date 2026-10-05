@@ -10,6 +10,7 @@ import '../models/task_card.dart';
 import '../models/triage_action.dart';
 import '../services/task_repository.dart';
 import 'inspect_sheet.dart';
+import 'colors.dart';
 import 'settings_screen.dart';
 import 'widgets/hold_confirm.dart';
 import 'widgets/task_card_view.dart';
@@ -321,16 +322,15 @@ class _PendingBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: const Color(0xFF5B8DEF).withValues(alpha: 0.18),
+        color: PopColors.amber,
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: const Color(0xFF5B8DEF).withValues(alpha: 0.5)),
       ),
       child: Text(
         '$count pending',
         style: const TextStyle(
           fontSize: 12,
-          fontWeight: FontWeight.w700,
-          color: Color(0xFF9FC0FF),
+          fontWeight: FontWeight.w800,
+          color: PopColors.ink,
         ),
       ),
     );

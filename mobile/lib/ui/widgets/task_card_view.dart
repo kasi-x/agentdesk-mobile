@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../models/task_card.dart';
+import '../colors.dart';
 import 'component_renderer.dart';
 import 'confidence_indicator.dart';
 
@@ -27,16 +28,21 @@ class TaskCardView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final (cardTop, cardBottom) = PopColors.severityCard(task.severity);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
       child: Container(
         decoration: BoxDecoration(
-          color: const Color(0xFF1A1F29),
+          // The card surface itself carries severity (color-pop).
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [cardTop, cardBottom],
+          ),
           borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: _edgeColor, width: 1),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.45),
+              color: Colors.black.withValues(alpha: 0.42),
               blurRadius: 24,
               offset: const Offset(0, 12),
             ),
@@ -91,31 +97,23 @@ class TaskCardView extends StatelessWidget {
     );
   }
 
-  Color get _edgeColor {
-    switch (task.severity) {
-      case 'critical':
-        return const Color(0xFFFF5C5C).withValues(alpha: 0.45);
-      case 'warning':
-        return const Color(0xFFFFB020).withValues(alpha: 0.45);
-      default:
-        return Colors.white.withValues(alpha: 0.08);
-    }
-  }
-
-  /// Deadline countdown strip (I-203). Urgency coloring: neutral →
-  /// amber (≤30m) → red (≤5m / past). The hub executes the default
-  /// behavior; the strip only tells the user what will happen.
+  /// Deadline countdown strip (I-203). Neutral = translucent dark pill;
+  /// soon (≤30m) = white pill with dark amber; urgent (≤5m / past) =
+  /// white pill with red. The hub executes the default behavior; the
+  /// strip only tells the user what will happen.
   Widget _countdownStrip() {
     final remaining = task.expiresAt!.difference(DateTime.now());
     final bool past = remaining.inSeconds <= 0;
-    Color color;
-    if (past || remaining <= const Duration(minutes: 5)) {
-      color = const Color(0xFFFF5C5C);
-    } else if (remaining <= const Duration(minutes: 30)) {
-      color = const Color(0xFFFFB020);
-    } else {
-      color = Colors.white38;
-    }
+    final bool urgent = past || remaining <= const Duration(minutes: 5);
+    final bool soon = !urgent && remaining <= const Duration(minutes: 30);
+    final Color textColor = urgent
+        ? PopColors.diffBefore
+        : soon
+            ? const Color(0xFF8A6A00)
+            : Colors.white.withValues(alpha: 0.92);
+    final Color bgColor = urgent || soon
+        ? PopColors.pill
+        : const Color(0x520F110C); // translucent dark pill
     final String when;
     if (past) {
       when = '期限切れ';
@@ -130,19 +128,19 @@ class TaskCardView extends StatelessWidget {
     };
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(10),
+        color: bgColor,
+        borderRadius: BorderRadius.circular(999),
       ),
       child: Row(
         children: [
-          Icon(Icons.hourglass_bottom, size: 13, color: color),
+          Icon(Icons.hourglass_bottom, size: 13, color: textColor),
           const SizedBox(width: 6),
           Text(
             past ? '$when · まもなく自動処理' : '$when · $verb',
             style: TextStyle(
-                fontSize: 11, fontWeight: FontWeight.w700, color: color),
+                fontSize: 11, fontWeight: FontWeight.w700, color: textColor),
           ),
         ],
       ),
@@ -167,7 +165,7 @@ class TaskCardView extends StatelessWidget {
       children: [
         CircleAvatar(
           radius: 16,
-          backgroundColor: const Color(0xFF5B8DEF).withValues(alpha: 0.25),
+          backgroundColor: PopColors.darkPill,
           backgroundImage: task.agent.avatarUrl != null
               ? NetworkImage(task.agent.avatarUrl!)
               : null,
@@ -176,7 +174,9 @@ class TaskCardView extends StatelessWidget {
               : Text(
                   task.agent.name.isNotEmpty ? task.agent.name[0] : '?',
                   style: const TextStyle(
-                      fontSize: 13, fontWeight: FontWeight.w800),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white),
                 ),
         ),
         const SizedBox(width: 10),
@@ -185,12 +185,19 @@ class TaskCardView extends StatelessWidget {
             task.agent.name,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+            style: const TextStyle(
+                fontWeight: FontWeight.w800,
+                fontSize: 14,
+                color: PopColors.ink,
+                letterSpacing: -0.2),
           ),
         ),
         Text(
           timeAgo(task.createdAt),
-          style: const TextStyle(fontSize: 11, color: Colors.white38),
+          style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: PopColors.inkSoft),
         ),
         const SizedBox(width: 8),
         _severityBadge(),
@@ -198,7 +205,7 @@ class TaskCardView extends StatelessWidget {
     );
   }
 
-  /// 「承認すると…」+ 可逆性バッジ (I-202)。
+  /// 「承認すると…」+ 可逆性バッジ (I-202)。Ink text on the colored card.
   Widget _impactRow() {
     final impact = task.impact!;
     final parts = <Widget>[];
@@ -209,7 +216,10 @@ class TaskCardView extends StatelessWidget {
             '承認すると ${impact.summary}',
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 12, color: Colors.white70),
+            style: const TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+                color: PopColors.ink),
           ),
         ),
       );
@@ -217,14 +227,14 @@ class TaskCardView extends StatelessWidget {
       parts.add(const Spacer());
     }
     if (impact.reversible == false) {
-      parts.add(_impactBadge('取り消し不可', const Color(0xFFFF5C5C)));
+      parts.add(_impactBadge('取り消し不可', const Color(0xFFFFC9C2)));
     } else if (impact.reversible == true) {
-      parts.add(_impactBadge('取り消し可', const Color(0xFF4CAF7D)));
+      parts.add(_impactBadge('取り消し可', const Color(0xFFD9F2B4)));
     }
     if (impact.costAmount != null && impact.costCurrency != null) {
       parts.add(_impactBadge(
         '${impact.costCurrency} ${impact.costAmount}',
-        const Color(0xFFFFB020),
+        const Color(0xFFFFE08A),
       ));
     }
     return Row(children: parts);
@@ -233,39 +243,37 @@ class TaskCardView extends StatelessWidget {
   Widget _impactBadge(String text, Color color) {
     return Container(
       margin: const EdgeInsets.only(left: 6),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.18),
+        color: PopColors.darkPill,
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withValues(alpha: 0.5), width: 0.8),
       ),
       child: Text(
         text,
         style: TextStyle(
-            fontSize: 10, fontWeight: FontWeight.w700, color: color),
+            fontSize: 10, fontWeight: FontWeight.w800, color: color),
       ),
     );
   }
 
   Widget _severityBadge() {
-    final (Color color, String label) = switch (task.severity) {
-      'critical' => (const Color(0xFFFF5C5C), 'CRITICAL'),
-      'warning' => (const Color(0xFFFFB020), 'WARNING'),
-      _ => (const Color(0xFF5B8DEF), 'INFO'),
+    final String label = switch (task.severity) {
+      'critical' => 'CRITICAL',
+      'warning' => 'WARNING',
+      _ => 'INFO',
     };
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.15),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: color.withValues(alpha: 0.4)),
+        color: PopColors.darkPill,
+        borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
         label,
-        style: TextStyle(
+        style: const TextStyle(
           fontSize: 9,
           fontWeight: FontWeight.w800,
-          color: color,
+          color: Colors.white,
           letterSpacing: 0.8,
         ),
       ),
@@ -336,17 +344,20 @@ class TaskCardView extends StatelessWidget {
   Widget _footerHints() {
     return const Row(
       children: [
-        Icon(Icons.swipe_left, size: 14, color: Colors.white30),
+        Icon(Icons.swipe_left, size: 14, color: PopColors.inkSoft),
         SizedBox(width: 4),
-        Text('Reject', style: TextStyle(fontSize: 11, color: Colors.white30)),
+        Text('Reject',
+            style: TextStyle(fontSize: 11, color: PopColors.inkSoft)),
         Spacer(),
-        Icon(Icons.touch_app, size: 14, color: Colors.white30),
+        Icon(Icons.touch_app, size: 14, color: PopColors.inkSoft),
         SizedBox(width: 4),
-        Text('Inspect', style: TextStyle(fontSize: 11, color: Colors.white30)),
+        Text('Inspect',
+            style: TextStyle(fontSize: 11, color: PopColors.inkSoft)),
         Spacer(),
-        Text('Approve', style: TextStyle(fontSize: 11, color: Colors.white30)),
+        Text('Approve',
+            style: TextStyle(fontSize: 11, color: PopColors.inkSoft)),
         SizedBox(width: 4),
-        Icon(Icons.swipe_right, size: 14, color: Colors.white30),
+        Icon(Icons.swipe_right, size: 14, color: PopColors.inkSoft),
       ],
     );
   }

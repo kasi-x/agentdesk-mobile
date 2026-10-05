@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#191b16" />
+  <title>AgentDesk Triage — preview (stubbed hub)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header id="topbar">
+    <div class="brand">
+      <span class="brand-glyph" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="5" y="14" width="14" height="7" rx="2" />
+          <rect x="3" y="8.5" width="18" height="5.5" rx="2" opacity="0.65" />
+          <rect x="7" y="3" width="10" height="5.5" rx="2" opacity="0.35" />
+        </svg>
+      </span>
+      <span class="brand-name">AgentDesk</span>
+      <span id="status-dot" class="dot" title="接続状態"></span>
+    </div>
+    <span id="pending-count" class="count" hidden></span>
+    <button id="settings-toggle" class="btn ghost sm" type="button">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="3" />
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+      </svg>
+      設定
+    </button>
+  </header>
+
+  <section id="settings" class="settings" hidden>
+    <label class="field">
+      <span>Hub URL</span>
+      <input id="hub-input" type="url" placeholder="https://hub.example.com" />
+    </label>
+    <label class="field">
+      <span>Client token</span>
+      <input id="token-input" type="password" autocomplete="off" placeholder="dev-client-token" />
+    </label>
+    <div class="settings-actions">
+      <button id="save-settings" class="btn primary" type="button">接続</button>
+    </div>
+  </section>
+
+  <main id="stack"></main>
+
+  <footer class="kbd-hints" aria-hidden="true">
+    <span><kbd>→</kbd>承認</span>
+    <span><kbd>←</kbd>却下</span>
+    <span><kbd>i</kbd>詳細</span>
+    <span><kbd>s</kbd>後で</span>
+  </footer>
+
+  <div id="sheet-backdrop" class="sheet-backdrop" hidden></div>
+  <div id="inspect-sheet" class="sheet" hidden></div>
+  <div id="toasts" class="toasts"></div>
+
+  <script>
+    localStorage.setItem('agentdesk.token', 'dev-client-token');
+    const inMin = (m) => new Date(Date.now() + m * 60000).toISOString();
+    const ago = (m) => new Date(Date.now() - m * 60000).toISOString();
+    const SAMPLE = [
+      {
+        type: 'createTaskCard', taskId: 'task_inbox', nonce: 'tok_3',
+        agent: { name: 'Inbox Triage Agent' },
+        confidence: 0.99, severity: 'warning',
+        summary: '迷惑メール判定: 削除してよいか確認',
+        createdAt: ago(40),
+        expiresAt: inMin(45), onExpire: 'drop',
+        impact: { summary: 'このメールを削除し、迷惑メールとして報告します', reversible: true },
+        components: [
+          { id: 'quote', component: 'Text', properties: { text: '（メール本文）おめでとうございます！あなたが当選しました。', source: 'external' } },
+          { id: 'opts', component: 'Chips', properties: { options: [ { label: '削除して報告', actionName: 'delete_and_report' }, { label: '受信箱に残す', actionName: 'keep' }, { label: '内容を詳しく見る' } ] } },
+        ],
+        actions: {
+          onSwipeRight: { actionName: 'delete_and_report', label: '削除して報告', payload: { decision: 'DELETE' } },
+          onSwipeLeft: { actionName: 'keep', label: '残す', payload: { decision: 'KEEP' } },
+        },
+      },
+      {
+        type: 'createTaskCard', taskId: 'task_billing', nonce: 'tok_2',
+        agent: { name: 'Billing Agent' },
+        confidence: 0.62, severity: 'critical',
+        confidenceReasons: ['返金額が$100超', '対象ユーザーの異議申立履歴あり'],
+        summary: 'Stripe返金の承認依頼',
+        createdAt: ago(11),
+        impact: { summary: 'Stripe で $120.00 を返金します', reversible: false, cost: { amount: 120, currency: 'USD' }, scope: 'UserA の請求 1 件' },
+        components: [
+          { id: 'diff', component: 'DiffBox', properties: { title: 'Stripe返金', before: '$120.00 請求済み', after: '$120.00 返金 → 対象: UserA', highlight: 'critical', inline: '- charge_8Kx2  $120.00\n+ refund_8Kx2  $120.00\n  status: pending' } },
+          { id: 'quote', component: 'Text', properties: { text: '（外部メール引用）商品が届かないため全額返金を要求します。至急対応してください。', source: 'external' } },
+        ],
+        actions: {
+          onSwipeRight: { actionName: 'approve', label: '$120 を返金する', payload: { decision: 'REFUND' } },
+          onSwipeLeft: { actionName: 'reject', label: '拒否', payload: { decision: 'DENY' } },
+          rejectReasons: [ { id: 'wrong_amount', label: '金額が違う' }, { id: 'contact_user', label: '先に利用者へ連絡' } ],
+          inspectForm: [
+            { id: 'amount', component: 'Slider', properties: { label: '返金額 ($)', min: 0, max: 120, default: 60, divisions: 12 } },
+            { id: 'note', component: 'TextField', properties: { label: '対応メモ', multiline: true } },
+          ],
+        },
+      },
+      {
+        type: 'createTaskCard', taskId: 'task_cal', nonce: 'tok_1',
+        agent: { name: 'Calendar & Meeting Agent' },
+        confidence: 0.94, severity: 'info',
+        summary: 'ミーティングの日程変更リクエスト',
+        createdAt: ago(2),
+        expiresAt: inMin(2), onExpire: 'approve',
+        impact: { summary: '定例ミーティングを 16:30 に変更して全員に通知します', reversible: true },
+        components: [
+          { id: 'root', component: 'TriageCard', children: ['diff', 'reason'] },
+          { id: 'diff', component: 'DiffBox', properties: { title: '定例ミーティング時間', before: '2026-10-05 14:00', after: '2026-10-05 16:30', highlight: 'warning' } },
+          { id: 'reason', component: 'Text', properties: { text: '参加者3名中2名が14:00に重複予定があるため、全員が空いている16:30への変更を提案します。', variant: 'caption' } },
+        ],
+        actions: {
+          onSwipeRight: { actionName: 'approve', label: '16:30 に変更する', payload: { decision: 'ACCEPT' } },
+          onSwipeLeft: { actionName: 'reject', label: '却下', payload: { decision: 'DECLINE' } },
+          inspectForm: [{ id: 'time_picker', component: 'TimePicker', properties: { label: '別の時間を指定', default: '16:30' } }],
+        },
+      },
+    ];
+    window.fetch = async () => ({ ok: true, status: 200, json: async () => ({ tasks: SAMPLE }) });
+    window.EventSource = class {
+      constructor() {
+        this.ls = {};
+        setTimeout(() => {
+          this.onopen && this.onopen();
+          this.ls.snapshot && this.ls.snapshot({ data: JSON.stringify({ tasks: SAMPLE }) });
+        }, 60);
+      }
+      addEventListener(t, fn) { (this.ls[t] = this.ls[t] || []).push(fn); }
+      close() {}
+    };
+    window.addEventListener('load', () => {
+      const t = document.createElement('div');
+      t.className = 'toast';
+      t.textContent = 'approve しました';
+      const u = document.createElement('button');
+      u.className = 'toast-undo';
+      u.textContent = '元に戻す';
+      t.appendChild(u);
+      document.getElementById('toasts').appendChild(t);
+    });
+  </script>
+  <script src="/app.js"></script>
+</body>
+</html>
