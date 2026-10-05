@@ -632,10 +632,11 @@ function countdownParts(expiresAt, onExpire) {
 
 /** Text-only refresh — a full render() every few seconds would break
  *  pointer-holds and drags mid-gesture. */
-function updateCountdown(stripEl) {
-  const parts = countdownParts(stripEl.dataset.expires, stripEl.dataset.onexpire);
-  stripEl.className = `countdown ${parts.cls}`.trim();
-  stripEl.textContent = parts.text;
+function updateCountdown(el2) {
+  const parts = countdownParts(el2.dataset.expires, el2.dataset.onexpire);
+  el2.classList.toggle('soon', parts.cls === 'soon');
+  el2.classList.toggle('urgent', parts.cls === 'urgent' || parts.cls === 'past');
+  el2.textContent = parts.text;
 }
 
 setInterval(() => {
@@ -644,21 +645,16 @@ setInterval(() => {
 
 function renderCard(task) {
   const sev = task.severity === 'critical' ? 'critical' : task.severity === 'warning' ? 'warning' : 'info';
-  // The card surface itself carries severity (color-pop theme).
+  const impact = task.impact && typeof task.impact === 'object' ? task.impact : null;
+  const ctx = task.context && typeof task.context === 'object' ? task.context : null;
+  const reasons = Array.isArray(task.confidenceReasons) ? task.confidenceReasons : [];
+  const pct = typeof task.confidence === 'number'
+    ? Math.round(Math.min(1, Math.max(0, task.confidence)) * 100) : null;
+
   const card = el('div', `card sev-${sev}`);
   const inner = el('div', 'card-inner');
 
-  // Expiry countdown strip (I-203): the hub executes the default
-  // behavior at the deadline; this only tells the user what will happen.
-  if (typeof task.expiresAt === 'string' && task.expiresAt) {
-    const strip = el('div', 'countdown');
-    strip.dataset.expires = task.expiresAt;
-    strip.dataset.onexpire = task.onExpire || 'drop';
-    updateCountdown(strip);
-    inner.appendChild(strip);
-  }
-
-  // Header: avatar, agent name, time, severity badge.
+  // Header: avatar, agent name (secondary), severity dot, time.
   const header = el('div', 'card-header');
   const avatar = el('div', 'avatar');
   const agent = task.agent || {};
@@ -672,54 +668,73 @@ function renderCard(task) {
     avatar.textContent = (agent.name || '?').slice(0, 1).toUpperCase();
   }
   header.appendChild(avatar);
-  const agentCol = el('div', 'card-agent');
-  agentCol.appendChild(el('div', 'agent-name', agent.name || 'Agent'));
-  agentCol.appendChild(el('div', 'card-meta', timeAgo(task.createdAt)));
-  header.appendChild(agentCol);
-  header.appendChild(el('span', `badge ${sev}`, sev));
+  header.appendChild(el('span', 'card-agent', agent.name || 'Agent'));
+  header.appendChild(el('span', `sev-dot ${sev === 'info' ? '' : sev}`.trim()));
+  const timeWrap = el('span', 'card-meta-time', timeAgo(task.createdAt));
+  header.appendChild(timeWrap);
   inner.appendChild(header);
-  // Impact row: 「承認すると…」+ reversibility / cost badges (I-202).
-  const impact = task.impact;
-  if (impact && typeof impact === 'object') {
-    const row = el('div', 'impact-row');
-    if (typeof impact.summary === 'string' && impact.summary) {
-      row.appendChild(el('span', 'impact-text', `承認すると ${impact.summary}`));
-    }
-    const impactBadge = (text, cls) => row.appendChild(el('span', `impact-badge ${cls}`, text));
-    if (impact.reversible === false) impactBadge('取り消し不可', 'no');
-    else if (impact.reversible === true) impactBadge('取り消し可', 'yes');
-    if (impact.cost && typeof impact.cost === 'object' &&
-        typeof impact.cost.amount === 'number' && impact.cost.currency) {
-      impactBadge(`${impact.cost.currency} ${impact.cost.amount}`, 'cost');
-    }
-    inner.appendChild(row);
-  }
 
-  // Confidence indicator.
-  if (typeof task.confidence === 'number') {
-    const conf = el('div', 'confidence');
-    const pct = Math.round(Math.min(1, Math.max(0, task.confidence)) * 100);
-    conf.appendChild(el('span', 'confidence-label', `Confidence: ${pct}%`));
-    const bar = el('div', 'confidence-bar');
-    const fill = el('div', `confidence-fill ${confidenceClass(task.confidence)}`);
-    fill.style.width = `${pct}%`;
-    bar.appendChild(fill);
-    conf.appendChild(bar);
-    inner.appendChild(conf);
-    const reasons = Array.isArray(task.confidenceReasons) ? task.confidenceReasons : [];
-    if (task.confidence < 0.9 && reasons.length) {
-      const rs = el('div', 'reasons');
-      for (const r of reasons) rs.appendChild(el('span', 'reason-chip', r));
-      inner.appendChild(rs);
-    }
-  }
-
+  // Headline: the summary. Then the 承認すると… line (the result, first).
   inner.appendChild(el('div', 'summary', task.summary || ''));
+  if (impact && typeof impact.summary === 'string' && impact.summary) {
+    const line = el('div', 'impact-text');
+    if (impact.reversible === false) line.appendChild(el('span', 'tag-no', '取り消し不可'));
+    line.appendChild(document.createTextNode(`承認すると ${impact.summary}`));
+    inner.appendChild(line);
+  }
 
-  for (const comp of orderedComponents(task)) inner.appendChild(renderComponent(comp, task));
+  for (const comp of orderedComponents(task)) {
+    inner.appendChild(renderComponent(comp, task));
+  }
+
+  // Quiet meta: 信頼度 · deadline (only what the decision needs).
+  if (pct !== null || task.expiresAt) {
+    const meta = el('div', 'meta');
+    if (pct !== null) {
+      meta.appendChild(el('span', `meta-item${task.confidence < 0.6 ? ' low' : ''}`, `信頼度 ${pct}%`));
+    }
+    if (typeof task.expiresAt === 'string' && task.expiresAt) {
+      const cd = el('span', 'meta-item countdown');
+      cd.dataset.expires = task.expiresAt;
+      cd.dataset.onexpire = task.onExpire || 'drop';
+      updateCountdown(cd);
+      meta.appendChild(cd);
+    }
+    inner.appendChild(meta);
+  }
+
+  // 詳細を見る — 理由/誰が/参加者/出典/金額/注意点 expand downward.
+  const hasContext = !!(ctx && (ctx.reasoning || ctx.requester?.name ||
+    (Array.isArray(ctx.participants) && ctx.participants.length) || ctx.source?.label));
+  const hasExtra = hasContext || (impact && impact.cost) ||
+    (pct !== null && pct < 90 && reasons.length > 0) || !!task.expiresAt;
+  if (hasExtra) {
+    const wrap = el('div', 'details');
+    const toggle = el('button', 'details-toggle');
+    toggle.type = 'button';
+    const label = el('span', 'details-label', '詳細を見る');
+    const chev = el('span', 'details-chev');
+    toggle.append(label, chev);
+    const panel = el('div', 'details-panel' + (expandedIds.has(task.taskId) ? ' open' : ''));
+    if (expandedIds.has(task.taskId)) toggle.classList.add('open');
+    const clip = el('div', 'details-clip');
+    clip.appendChild(buildDetailsList(task, { ctx, impact, reasons }));
+    panel.appendChild(clip);
+    toggle.addEventListener('click', () => {
+      const open = !panel.classList.contains('open');
+      panel.classList.toggle('open', open);
+      toggle.classList.toggle('open', open);
+      label.textContent = open ? '詳細を隠す' : '詳細を見る';
+      if (open) expandedIds.add(task.taskId);
+      else expandedIds.delete(task.taskId);
+    });
+    wrap.append(toggle, panel);
+    inner.appendChild(wrap);
+  }
+
   card.appendChild(inner);
 
-  // Actions row.
+  // Actions row: two decisions + snooze. 承認 carries the weight.
   const actions = el('div', 'card-actions');
   const right = task.actions && task.actions.onSwipeRight;
   const left = task.actions && task.actions.onSwipeLeft;
@@ -812,7 +827,7 @@ function renderCard(task) {
   inspect.type = 'button';
   inspect.addEventListener('click', () => openInspect(task));
 
-  const snz = el('button', 'btn dim', 'Snooze');
+  const snz = el('button', 'btn dim', '後で');
   snz.type = 'button';
   snz.addEventListener('click', () => snooze(task));
 
@@ -820,6 +835,84 @@ function renderCard(task) {
   card.appendChild(actions);
   return card;
 }
+
+/* 詳細パネル: 理由 / 誰が / 参加者 / 出典 / 金額 / 注意点 (P1: 裏面)。
+ * All payload strings render via textContent (NFR-2.1); links are
+ * restricted to http(s) so a payload can never become javascript:. */
+function buildDetailsList(task, { ctx, impact, reasons }) {
+  const list = el('div', 'details-list');
+  const row = (label, node) => {
+    const r = el('div', 'drow');
+    r.appendChild(el('div', 'drow-label', label));
+    r.appendChild(node);
+    list.appendChild(r);
+  };
+  const safeHref = (url) =>
+    typeof url === 'string' && /^https?:\/\//i.test(url) ? url : null;
+
+  if (ctx && ctx.reasoning) {
+    row('なぜ', el('div', 'drow-value', ctx.reasoning));
+  }
+  if (ctx && ctx.requester && ctx.requester.name) {
+    const v = el('div', 'drow-value', ctx.requester.name);
+    if (ctx.requester.onBehalfOf) {
+      v.appendChild(el('div', 'sub', `${ctx.requester.onBehalfOf} の依頼`));
+    }
+    row('誰が', v);
+  }
+  if (ctx && Array.isArray(ctx.participants) && ctx.participants.length) {
+    const wrap = el('div', 'drow-value');
+    wrap.style.display = 'flex';
+    wrap.style.flexWrap = 'wrap';
+    wrap.style.gap = '6px';
+    for (const p of ctx.participants) {
+      const chip = el('span', 'dpart');
+      const status = (p.status || '').toLowerCase();
+      const dot = el('span', `dpart-dot${status.includes('free') ? ' free' : status.includes('busy') || status.includes('重複') ? ' busy' : ''}`);
+      chip.append(dot, el('span', '', p.name));
+      if (p.status) chip.appendChild(el('span', 'sub', p.status));
+      wrap.appendChild(chip);
+    }
+    row('参加者', wrap);
+  }
+  if (ctx && ctx.source && ctx.source.label) {
+    const href = safeHref(ctx.source.url);
+    const v = el('div', 'drow-value');
+    if (href) {
+      const a = el('a', 'dlink', ctx.source.label);
+      a.href = href;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      v.appendChild(a);
+    } else {
+      v.appendChild(el('span', '', ctx.source.label));
+    }
+    row('出典', v);
+  }
+  if (impact && impact.cost && typeof impact.cost === 'object' &&
+      typeof impact.cost.amount === 'number' && impact.cost.currency) {
+    row('金額', el('div', 'drow-value', `${impact.cost.currency} ${impact.cost.amount.toLocaleString('en-US')}`));
+  }
+  if (reasons.length > 0) {
+    const wrap = el('div', 'drow-value');
+    wrap.style.display = 'flex';
+    wrap.style.flexWrap = 'wrap';
+    wrap.style.gap = '6px';
+    for (const r of reasons) wrap.appendChild(el('span', 'dtag', r));
+    row('注意点', wrap);
+  }
+  if (typeof task.expiresAt === 'string' && task.expiresAt) {
+    const at = new Date(task.expiresAt);
+    const when = Number.isNaN(at.getTime())
+      ? task.expiresAt
+      : at.toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const verb = { approve: '自動承認', reject: '自動却下', escalate: '緊急化' }[task.onExpire] || '自動破棄';
+    row('期限', el('div', 'drow-value', `${when} — ${verb}`));
+  }
+  return list;
+}
+
+const expandedIds = new Set();
 
 function render() {
   const stackEl = document.getElementById('stack');

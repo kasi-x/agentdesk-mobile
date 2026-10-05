@@ -1,56 +1,37 @@
 import 'package:flutter/material.dart';
 
-/// Color-pop design tokens — mirror of `web/style.css :root`.
+/// Calm-iOS design tokens — mirror of `web/style.css :root`.
 ///
-/// The card surface itself carries severity (lime = info, amber =
-/// warning, coral = critical) with near-black ink text; white pills
-/// carry content components; dark pills carry actions. Chrome stays
-/// warm-dark and quiet.
+/// Apple-style minimal card: a neutral elevated surface, iOS system
+/// grays, color reserved for meaning (severity dot, diff highlight,
+/// approve/reject). Really necessary information on the front; the
+/// rest (理由/誰が/参加者/出典) expands in the details panel.
 abstract final class PopColors {
-  // Warm dark chrome.
-  static const Color bg = Color(0xFF191B16);
-  static const Color chrome = Color(0xFF23251F);
-  static const Color chrome2 = Color(0xFF2B2E27);
-  static const Color borderColor = Color(0xFF3A3D34);
-  static const Color text = Color(0xFFEEF0E9);
-  static const Color muted = Color(0xFFA8AD9F);
-  static const Color faint = Color(0xFF77806B);
+  // iOS dark system grays.
+  static const Color bg = Color(0xFF0A0A0B);
+  static const Color surface = Color(0xFF1C1C1E); // elevated card
+  static const Color surface2 = Color(0xFF2C2C2E); // inset grouped list
+  static const Color fill = Color(0x5C787880); // tertiarySystemFill
+  static const Color fill2 = Color(0x3D787880); // quaternary fill — chips
+  static const Color separator = Color(0xA6545458);
+  static const Color borderColor = Color(0xFF2C2C2E);
+  static const Color borderSoft = Color(0x14FFFFFF);
 
-  /// Amber CTA (pending pill, 修正して承認, segmented selection).
-  static const Color amber = Color(0xFFF5C842);
+  static const Color text = Color(0xFFFFFFFF); // label
+  static const Color text2 = Color(0x99EBEBF5); // secondaryLabel
+  static const Color text3 = Color(0x4DEBEBF5); // tertiaryLabel
 
-  // Ink on colored cards.
-  static const Color ink = Color(0xFF1B1E16);
-  static const Color inkSoft = Color(0xC61B1E16);
-  static const Color pill = Color(0xEDFFFFFF);
-  static const Color pillInk = Color(0xFF22251D);
-  static const Color darkPill = Color(0xEB14170F);
+  // System colors (dark).
+  static const Color blue = Color(0xFF0A84FF);
+  static const Color green = Color(0xFF30D158);
+  static const Color red = Color(0xFFFF453A);
+  static const Color orange = Color(0xFFFF9F0A);
+  static const Color yellow = Color(0xFFFFD60A);
 
-  // Severity card gradients (top → bottom).
-  static const Color infoTop = Color(0xFFD6EC86);
-  static const Color infoBottom = Color(0xFFC2DF5F);
-  static const Color warningTop = Color(0xFFF7D452);
-  static const Color warningBottom = Color(0xFFEFBA2F);
-  static const Color criticalTop = Color(0xFFF4695C);
-  static const Color criticalBottom = Color(0xFFE94A3D);
-
-  static const Color lime = Color(0xFFC9E26B);
-  static const Color coral = Color(0xFFFF8D7E);
-
-  static const Color diffBefore = Color(0xFFC2321F);
-  static const Color diffAfter = Color(0xFF1C7A3A);
-
-  /// (top, bottom) gradient pair for a severity card surface.
-  static (Color, Color) severityCard(String severity) => switch (severity) {
-        'critical' => (criticalTop, criticalBottom),
-        'warning' => (warningTop, warningBottom),
-        _ => (infoTop, infoBottom),
-      };
-
-  /// Flat severity card surface (color-pop, no gradient).
-  static Color severitySolid(String severity) => switch (severity) {
-        'critical' => criticalTop,
-        'warning' => warningTop,
-        _ => infoTop,
+  /// Severity dot colors.
+  static Color severityDot(String severity) => switch (severity) {
+        'critical' => red,
+        'warning' => orange,
+        _ => blue,
       };
 }

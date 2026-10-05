@@ -47,13 +47,13 @@ class ComponentRenderer extends StatelessWidget {
     final variant = component.properties['variant'] as String?;
     final style = switch (variant) {
       'title' => Theme.of(context).textTheme.titleMedium
-          ?.copyWith(color: PopColors.ink, fontWeight: FontWeight.w800),
+          ?.copyWith(color: PopColors.text, fontWeight: FontWeight.w800),
       'caption' => Theme.of(context).textTheme.bodySmall
-          ?.copyWith(color: PopColors.inkSoft),
+          ?.copyWith(color: PopColors.text2),
       _ => Theme.of(context)
           .textTheme
           .bodyMedium
-          ?.copyWith(color: PopColors.ink),
+          ?.copyWith(color: PopColors.text),
     };
     // External-origin text (mail bodies, PR comments) renders in the
     // white pill quote-block style so it cannot impersonate system UI
@@ -64,9 +64,9 @@ class ComponentRenderer extends StatelessWidget {
         decoration: BoxDecoration(
           border: Border(
             left: BorderSide(
-                color: PopColors.ink.withValues(alpha: 0.35), width: 3),
+                color: PopColors.text.withValues(alpha: 0.35), width: 3),
           ),
-          color: PopColors.pill,
+          color: PopColors.surface2,
           borderRadius: const BorderRadius.horizontal(
             left: Radius.circular(6),
             right: Radius.circular(12),
@@ -100,7 +100,7 @@ class ComponentRenderer extends StatelessWidget {
                     fontWeight: FontWeight.w600,
                     color: Colors.white),
               ),
-              backgroundColor: PopColors.darkPill,
+              backgroundColor: PopColors.fill2,
               side: BorderSide.none,
               shape: const StadiumBorder(),
               visualDensity: VisualDensity.compact,
@@ -132,7 +132,7 @@ class ComponentRenderer extends StatelessWidget {
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
-          color: PopColors.ink.withValues(alpha: 0.3),
+          color: PopColors.text.withValues(alpha: 0.3),
           width: 1.5,
         ),
       ),
@@ -144,7 +144,7 @@ class ComponentRenderer extends StatelessWidget {
             style: TextStyle(
               fontWeight: FontWeight.w800,
               fontSize: 12,
-              color: PopColors.inkSoft,
+              color: PopColors.text2,
             ),
           ),
           Text(
@@ -152,7 +152,7 @@ class ComponentRenderer extends StatelessWidget {
             style: const TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w700,
-              color: PopColors.ink,
+              color: PopColors.text,
             ),
           ),
           const SizedBox(height: 4),
@@ -160,7 +160,7 @@ class ComponentRenderer extends StatelessWidget {
             pretty,
             style: const TextStyle(
               fontSize: 11,
-              color: PopColors.inkSoft,
+              color: PopColors.text2,
               fontFamily: 'monospace',
             ),
           ),
