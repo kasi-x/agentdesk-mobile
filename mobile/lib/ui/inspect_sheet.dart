@@ -20,7 +20,7 @@ Future<void> showInspectSheet(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
-    backgroundColor: PopColors.chrome,
+    backgroundColor: PopColors.surface,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
     ),
@@ -350,7 +350,7 @@ class _FormTile extends StatelessWidget {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: PopColors.borderColor),
-          color: PopColors.chrome2,
+          color: PopColors.surface2,
         ),
         child: Row(
           children: [

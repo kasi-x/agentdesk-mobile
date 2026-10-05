@@ -3,11 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#191b16" />
+  <meta name="theme-color" content="#0a0a0b" />
   <title>AgentDesk Triage — preview (stubbed hub)</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
@@ -73,6 +70,11 @@
         createdAt: ago(40),
         expiresAt: inMin(45), onExpire: 'drop',
         impact: { summary: 'このメールを削除し、迷惑メールとして報告します', reversible: true },
+        context: {
+          requester: { name: 'Inbox Triage Agent' },
+          reasoning: 'スパム判定スコア 0.98。過去30日で同一パターンを12件検出。',
+          source: { label: 'Gmail 受信トレイ' },
+        },
         components: [
           { id: 'quote', component: 'Text', properties: { text: '（メール本文）おめでとうございます！あなたが当選しました。', source: 'external' } },
           { id: 'opts', component: 'Chips', properties: { options: [ { label: '削除して報告', actionName: 'delete_and_report' }, { label: '受信箱に残す', actionName: 'keep' }, { label: '内容を詳しく見る' } ] } },
@@ -90,6 +92,12 @@
         summary: 'Stripe返金の承認依頼',
         createdAt: ago(11),
         impact: { summary: 'Stripe で $120.00 を返金します', reversible: false, cost: { amount: 120, currency: 'USD' }, scope: 'UserA の請求 1 件' },
+        context: {
+          requester: { name: 'UserA', onBehalfOf: 'サポートチケット #4821' },
+          participants: [ { name: 'UserA', status: '要返金' } ],
+          reasoning: '商品未着の申し立て。返金ポリシー内の金額で、同カードへの過去返金履歴は1件のみ。Stripe Refund APIで即時処理されます。',
+          source: { label: 'サポートメール(添付: 領収書.pdf)' },
+        },
         components: [
           { id: 'diff', component: 'DiffBox', properties: { title: 'Stripe返金', before: '$120.00 請求済み', after: '$120.00 返金 → 対象: UserA', highlight: 'critical', rows: [ { label: '返金額', before: '$120.00', after: '$80.00' } ], inline: '- charge_8Kx2  $120.00\n+ refund_8Kx2  $120.00\n  status: pending' } },
           { id: 'quote', component: 'Text', properties: { text: '（外部メール引用）商品が届かないため全額返金を要求します。至急対応してください。', source: 'external' } },
@@ -112,6 +120,16 @@
         createdAt: ago(2),
         expiresAt: inMin(2), onExpire: 'approve',
         impact: { summary: '定例ミーティングを 16:30 に変更して全員に通知します', reversible: true },
+        context: {
+          requester: { name: 'Bさん', onBehalfOf: 'プロジェクトリード' },
+          participants: [
+            { name: 'Aさん', status: 'busy 14:00' },
+            { name: 'Cさん', status: 'busy 14:00' },
+            { name: '自分', status: 'free' },
+          ],
+          reasoning: 'Bさんからの日程変更依頼メール。参加者3名中2名が14:00に重複予定があり、全員が空いている16:30への変更を提案。カレンダーAPIで全員に通知済みの予定を更新します。',
+          source: { label: 'Gmail —「会議日程変更のお願い」', url: 'https://mail.google.com/mail/u/0/#inbox/sample' },
+        },
         components: [
           { id: 'root', component: 'TriageCard', children: ['diff', 'reason'] },
           { id: 'diff', component: 'DiffBox', properties: { title: '定例ミーティング時間', before: '2026-10-05 14:00', after: '2026-10-05 16:30', highlight: 'warning', duration: 60 } },

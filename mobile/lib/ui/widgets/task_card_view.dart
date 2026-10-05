@@ -1,14 +1,15 @@
 import 'package:flutter/material.dart';
 
+
 import '../../models/task_card.dart';
 import '../colors.dart';
 import 'component_renderer.dart';
-import 'confidence_indicator.dart';
 
-/// One triage card: header → confidence → diff/body → chips (spec §3.2).
-/// [swipePercentX]/[swipePercentY] are signed percentages toward the
-/// swipe threshold, used to paint the directional overlay.
-class TaskCardView extends StatelessWidget {
+/// One triage card — calm-iOS minimal: only what the decision needs is
+/// on the front (summary headline, 承認すると… line, value-aware diff,
+/// quiet meta). Everything else (理由/誰が/参加者/出典) expands via the
+/// 詳細を見る toggle. [swipePercentX]/[swipePercentY] paint the overlay.
+class TaskCardView extends StatefulWidget {
   final TaskCard task;
   final String Function(DateTime) timeAgo;
   final void Function(ActionBinding binding) onQuickAction;
@@ -27,64 +28,94 @@ class TaskCardView extends StatelessWidget {
   });
 
   @override
+  State<TaskCardView> createState() => _TaskCardViewState();
+}
+
+class _TaskCardViewState extends State<TaskCardView> {
+  bool _expanded = false;
+
+  TaskCard get task => widget.task;
+
+  bool get _hasDetails {
+    final ctx = task.context;
+    final impact = task.impact;
+    final hasContext = ctx != null &&
+        (ctx.reasoning != null ||
+            ctx.requesterName != null ||
+            ctx.participants.isNotEmpty ||
+            ctx.sourceLabel != null);
+    return hasContext ||
+        (impact?.costAmount != null) ||
+        (task.confidence < 0.9 && task.confidenceReasons.isNotEmpty) ||
+        task.expiresAt != null;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final cardColor = PopColors.severitySolid(task.severity);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
       child: Container(
         decoration: BoxDecoration(
-          // The card surface itself carries severity (color-pop, flat).
-          color: cardColor,
-          borderRadius: BorderRadius.circular(24),
+          color: PopColors.surface,
+          borderRadius: BorderRadius.circular(18),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.42),
-              blurRadius: 24,
-              offset: const Offset(0, 12),
+              color: Colors.black.withValues(alpha: 0.5),
+              blurRadius: 30,
+              offset: const Offset(0, 10),
             ),
           ],
         ),
         child: Material(
           color: Colors.transparent,
           child: InkWell(
-            borderRadius: BorderRadius.circular(24),
-            onTap: onInspect,
+            borderRadius: BorderRadius.circular(18),
+            onTap: widget.onInspect,
             child: Stack(
               children: [
                 Padding(
-                  padding: const EdgeInsets.all(18),
+                  padding: const EdgeInsets.all(16),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (task.expiresAt != null) ...[
-                        _countdownStrip(),
-                        const SizedBox(height: 10),
-                      ],
-                      _header(context),
-                      if (task.impact != null) ...[
-                        const SizedBox(height: 8),
-                        _impactRow(),
-                      ],
-                      const SizedBox(height: 14),
-                      ConfidenceIndicator(
-                        confidence: task.confidence,
-                        reasons: task.confidenceReasons,
+                      _header(),
+                      const SizedBox(height: 10),
+                      Text(
+                        task.summary,
+                        style: const TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: -0.4,
+                          height: 1.3,
+                          color: PopColors.text,
+                        ),
                       ),
-                      const SizedBox(height: 14),
+                      if (task.impact?.summary != null) ...[
+                        const SizedBox(height: 4),
+                        _impactLine(),
+                      ],
+                      const SizedBox(height: 10),
                       for (final component in task.bodyComponents) ...[
                         ComponentRenderer(
                           component: component,
-                          onAction: onQuickAction,
-                          onInspect: onInspect,
+                          onAction: widget.onQuickAction,
+                          onInspect: widget.onInspect,
                         ),
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 10),
                       ],
-                      const Spacer(),
+                      _metaLine(),
+                      if (_hasDetails) ...[
+                        const SizedBox(height: 4),
+                        _detailsSection(),
+                      ],
+                      const SizedBox(height: 8),
                       _footerHints(),
                     ],
                   ),
                 ),
-                Positioned.fill(child: IgnorePointer(child: _swipeOverlay())),
+                Positioned.fill(
+                  child: IgnorePointer(child: _swipeOverlay()),
+                ),
               ],
             ),
           ),
@@ -93,53 +124,133 @@ class TaskCardView extends StatelessWidget {
     );
   }
 
-  /// Deadline countdown strip (I-203). Neutral = translucent dark pill;
-  /// soon (≤30m) = white pill with dark amber; urgent (≤5m / past) =
-  /// white pill with red. The hub executes the default behavior; the
-  /// strip only tells the user what will happen.
-  Widget _countdownStrip() {
-    final remaining = task.expiresAt!.difference(DateTime.now());
-    final bool past = remaining.inSeconds <= 0;
-    final bool urgent = past || remaining <= const Duration(minutes: 5);
-    final bool soon = !urgent && remaining <= const Duration(minutes: 30);
-    final Color textColor = urgent
-        ? PopColors.diffBefore
-        : soon
-            ? const Color(0xFF8A6A00)
-            : Colors.white.withValues(alpha: 0.92);
-    final Color bgColor = urgent || soon
-        ? PopColors.pill
-        : const Color(0x520F110C); // translucent dark pill
-    final String when;
-    if (past) {
-      when = '期限切れ';
-    } else {
-      when = '残り ${_formatRemaining(remaining)}';
-    }
-    final verb = switch (task.onExpire) {
-      'approve' => '期限で自動承認',
-      'reject' => '期限で自動却下',
-      'escalate' => '期限で緊急化',
-      _ => '期限で破棄',
-    };
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.hourglass_bottom, size: 13, color: textColor),
-          const SizedBox(width: 6),
-          Text(
-            past ? '$when · まもなく自動処理' : '$when · $verb',
-            style: TextStyle(
-                fontSize: 11, fontWeight: FontWeight.w700, color: textColor),
+  Widget _header() {
+    return Row(
+      children: [
+        CircleAvatar(
+          radius: 14,
+          backgroundColor: PopColors.fill,
+          backgroundImage: task.agent.avatarUrl != null
+              ? NetworkImage(task.agent.avatarUrl!)
+              : null,
+          child: task.agent.avatarUrl != null
+              ? null
+              : Text(
+                  task.agent.name.isNotEmpty ? task.agent.name[0] : '?',
+                  style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: PopColors.text),
+                ),
+        ),
+        const SizedBox(width: 9),
+        Expanded(
+          child: Text(
+            task.agent.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: PopColors.text2),
           ),
-        ],
+        ),
+        Container(
+          width: 7,
+          height: 7,
+          decoration: BoxDecoration(
+            color: PopColors.severityDot(task.severity),
+            shape: BoxShape.circle,
+          ),
+        ),
+        const SizedBox(width: 9),
+        Text(
+          widget.timeAgo(task.createdAt),
+          style: const TextStyle(fontSize: 13, color: PopColors.text3),
+        ),
+      ],
+    );
+  }
+
+  /// 「承認すると…」+ 取り消し不可 tag — the result, stated first (P3).
+  Widget _impactLine() {
+    final impact = task.impact!;
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        if (impact.reversible == false)
+          Container(
+            margin: const EdgeInsets.only(right: 7),
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+            decoration: BoxDecoration(
+              color: PopColors.red.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: const Text(
+              '取り消し不可',
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: PopColors.red),
+            ),
+          ),
+        Text(
+          '承認すると ${impact.summary}',
+          style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w500,
+              color: PopColors.text2),
+        ),
+      ],
+    );
+  }
+
+  /// Quiet meta: 信頼度 · deadline. Urgency color only when it matters.
+  Widget _metaLine() {
+    if (task.confidence == 0 && task.expiresAt == null) {
+      return const SizedBox.shrink();
+    }
+    final pct = (task.confidence * 100).round();
+    final items = <Widget>[
+      Text(
+        '信頼度 $pct%',
+        style: TextStyle(
+          fontSize: 13,
+          fontFeatures: const [FontFeature.tabularFigures()],
+          color: task.confidence < 0.6 ? PopColors.orange : PopColors.text2,
+        ),
       ),
+    ];
+    if (task.expiresAt != null) {
+      final remaining = task.expiresAt!.difference(DateTime.now());
+      final urgent =
+          remaining.inSeconds <= 0 || remaining <= const Duration(minutes: 5);
+      final soon = !urgent && remaining <= const Duration(minutes: 30);
+      final when = remaining.inSeconds <= 0
+          ? '期限切れ'
+          : '残り ${_formatRemaining(remaining)}';
+      items.add(
+        Text(
+          when,
+          style: TextStyle(
+            fontSize: 13,
+            fontFeatures: const [FontFeature.tabularFigures()],
+            color: urgent
+                ? PopColors.red
+                : soon
+                    ? PopColors.orange
+                    : PopColors.text2,
+          ),
+        ),
+      );
+    }
+    return Row(
+      children: [
+        for (var i = 0; i < items.length; i++) ...[
+          if (i > 0) const SizedBox(width: 14),
+          items[i],
+        ],
+      ],
     );
   }
 
@@ -156,140 +267,82 @@ class TaskCardView extends StatelessWidget {
     return '${remaining.inSeconds}秒';
   }
 
-  Widget _header(BuildContext context) {
-    return Row(
-      children: [
-        CircleAvatar(
-          radius: 16,
-          backgroundColor: PopColors.darkPill,
-          backgroundImage: task.agent.avatarUrl != null
-              ? NetworkImage(task.agent.avatarUrl!)
-              : null,
-          child: task.agent.avatarUrl != null
-              ? null
-              : Text(
-                  task.agent.name.isNotEmpty ? task.agent.name[0] : '?',
-                  style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.white),
-                ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(
-            task.agent.name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-                fontWeight: FontWeight.w800,
-                fontSize: 14,
-                color: PopColors.ink,
-                letterSpacing: -0.2),
-          ),
-        ),
-        Text(
-          timeAgo(task.createdAt),
-          style: const TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: PopColors.inkSoft),
-        ),
-        const SizedBox(width: 8),
-        _severityBadge(),
-      ],
-    );
-  }
-
-  /// 「承認すると…」+ 可逆性バッジ (I-202)。Ink text on the colored card.
-  Widget _impactRow() {
-    final impact = task.impact!;
-    final parts = <Widget>[];
-    if (impact.summary != null) {
-      parts.add(
-        Expanded(
-          child: Text(
-            '承認すると ${impact.summary}',
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w600,
-                color: PopColors.ink),
-          ),
-        ),
-      );
-    } else {
-      parts.add(const Spacer());
-    }
-    if (impact.reversible == false) {
-      parts.add(_impactBadge('取り消し不可', const Color(0xFFFFC9C2)));
-    } else if (impact.reversible == true) {
-      parts.add(_impactBadge('取り消し可', const Color(0xFFD9F2B4)));
-    }
-    if (impact.costAmount != null && impact.costCurrency != null) {
-      parts.add(_impactBadge(
-        '${impact.costCurrency} ${impact.costAmount}',
-        const Color(0xFFFFE08A),
-      ));
-    }
-    return Row(children: parts);
-  }
-
-  Widget _impactBadge(String text, Color color) {
+  /// 詳細を見る → expands downward (Apple: common path first, context one
+  /// level deeper). 理由 / 誰が / 参加者 / 出典 / 金額 / 注意点 / 期限.
+  Widget _detailsSection() {
+    final open = _expanded;
     return Container(
-      margin: const EdgeInsets.only(left: 6),
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-      decoration: BoxDecoration(
-        color: PopColors.darkPill,
-        borderRadius: BorderRadius.circular(999),
+      margin: const EdgeInsets.only(top: 2),
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: PopColors.borderSoft)),
       ),
-      child: Text(
-        text,
-        style: TextStyle(
-            fontSize: 10, fontWeight: FontWeight.w800, color: color),
-      ),
-    );
-  }
-
-  Widget _severityBadge() {
-    final (String label, Color dot) = switch (task.severity) {
-      'critical' => const ('CRITICAL', Color(0xFFD0342C)),
-      'warning' => const ('WARNING', Color(0xFFE08C00)),
-      _ => const ('INFO', Color(0xFF5B8DEF)),
-    };
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: PopColors.pill,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
+      child: Column(
         children: [
-          Container(
-            width: 6,
-            height: 6,
-            decoration: BoxDecoration(color: dot, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 5),
-          Text(
-            label,
-            style: const TextStyle(
-              fontSize: 9,
-              fontWeight: FontWeight.w800,
-              color: PopColors.ink,
-              letterSpacing: 0.8,
+          InkWell(
+            onTap: () => setState(() => _expanded = !_expanded),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 11),
+              child: Row(
+                children: [
+                  Text(
+                    open ? '詳細を隠す' : '詳細を見る',
+                    style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: PopColors.blue),
+                  ),
+                  const Spacer(),
+                  AnimatedRotation(
+                    turns: open ? 0.5 : 0,
+                    duration: const Duration(milliseconds: 220),
+                    curve: Curves.easeOutCubic,
+                    child: const Icon(Icons.expand_more,
+                        size: 18, color: PopColors.blue),
+                  ),
+                ],
+              ),
             ),
+          ),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 260),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.topCenter,
+            child: open
+                ? Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: _DetailsPanel(task: task),
+                  )
+                : const SizedBox(width: double.infinity),
           ),
         ],
       ),
     );
   }
 
+  Widget _footerHints() {
+    return const Row(
+      children: [
+        Icon(Icons.swipe_left, size: 14, color: PopColors.text3),
+        SizedBox(width: 4),
+        Text('Reject',
+            style: TextStyle(fontSize: 11, color: PopColors.text3)),
+        Spacer(),
+        Icon(Icons.touch_app, size: 14, color: PopColors.text3),
+        SizedBox(width: 4),
+        Text('Inspect',
+            style: TextStyle(fontSize: 11, color: PopColors.text3)),
+        Spacer(),
+        Text('Approve',
+            style: TextStyle(fontSize: 11, color: PopColors.text3)),
+        SizedBox(width: 4),
+        Icon(Icons.swipe_right, size: 14, color: PopColors.text3),
+      ],
+    );
+  }
+
   Widget _swipeOverlay() {
-    final x = swipePercentX;
-    final y = swipePercentY;
+    final x = widget.swipePercentX;
+    final y = widget.swipePercentY;
     if (x == 0 && y == 0) return const SizedBox.shrink();
 
     Widget layer;
@@ -298,9 +351,11 @@ class TaskCardView extends StatelessWidget {
       final approve = x > 0;
       layer = Container(
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(24),
-          color: (approve ? const Color(0xFF2E7D50) : const Color(0xFFB34040))
-              .withValues(alpha: opacity * 0.55),
+          borderRadius: BorderRadius.circular(18),
+          color: (approve
+                  ? const Color(0xFF1D3A2A)
+                  : const Color(0xFF3A1D1D))
+              .withValues(alpha: opacity * 0.85),
         ),
         alignment: Alignment.center,
         child: Column(
@@ -308,7 +363,7 @@ class TaskCardView extends StatelessWidget {
           children: [
             Icon(
               approve ? Icons.check_circle_outline : Icons.cancel_outlined,
-              color: Colors.white,
+              color: approve ? PopColors.green : PopColors.red,
               size: 44,
             ),
             const SizedBox(height: 6),
@@ -316,10 +371,10 @@ class TaskCardView extends StatelessWidget {
               approve
                   ? (task.onSwipeRight?.label ?? 'APPROVE')
                   : (task.onSwipeLeft?.label ?? 'REJECT'),
-              style: const TextStyle(
-                color: Colors.white,
+              style: TextStyle(
+                color: approve ? PopColors.green : PopColors.red,
                 fontSize: 18,
-                fontWeight: FontWeight.w900,
+                fontWeight: FontWeight.w800,
                 letterSpacing: 2,
               ),
             ),
@@ -330,16 +385,16 @@ class TaskCardView extends StatelessWidget {
       final opacity = (y.abs() / 100).clamp(0.0, 1.0);
       layer = Container(
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(24),
-          color: const Color(0xFF3D5A99).withValues(alpha: opacity * 0.55),
+          borderRadius: BorderRadius.circular(18),
+          color: const Color(0xFF2C313A).withValues(alpha: opacity * 0.85),
         ),
         alignment: Alignment.center,
         child: const Text(
           'SNOOZE',
           style: TextStyle(
-            color: Colors.white,
+            color: PopColors.text2,
             fontSize: 18,
-            fontWeight: FontWeight.w900,
+            fontWeight: FontWeight.w800,
             letterSpacing: 2,
           ),
         ),
@@ -347,25 +402,185 @@ class TaskCardView extends StatelessWidget {
     }
     return layer;
   }
+}
 
-  Widget _footerHints() {
-    return const Row(
-      children: [
-        Icon(Icons.swipe_left, size: 14, color: PopColors.inkSoft),
-        SizedBox(width: 4),
-        Text('Reject',
-            style: TextStyle(fontSize: 11, color: PopColors.inkSoft)),
-        Spacer(),
-        Icon(Icons.touch_app, size: 14, color: PopColors.inkSoft),
-        SizedBox(width: 4),
-        Text('Inspect',
-            style: TextStyle(fontSize: 11, color: PopColors.inkSoft)),
-        Spacer(),
-        Text('Approve',
-            style: TextStyle(fontSize: 11, color: PopColors.inkSoft)),
-        SizedBox(width: 4),
-        Icon(Icons.swipe_right, size: 14, color: PopColors.inkSoft),
-      ],
+/// 詳細パネル: 理由 / 誰が / 参加者 / 出典 / 金額 / 注意点 / 期限 (P1: 裏面)。
+/// Inset grouped rows, iOS list style. Links stay label-only on mobile.
+class _DetailsPanel extends StatelessWidget {
+  final TaskCard task;
+
+  const _DetailsPanel({required this.task});
+
+  @override
+  Widget build(BuildContext context) {
+    final ctx = task.context;
+    final impact = task.impact;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 4),
+      decoration: BoxDecoration(
+        color: PopColors.surface2,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (ctx?.reasoning != null)
+            _row('なぜ',
+                Text(ctx!.reasoning!, style: const TextStyle(fontSize: 14, height: 1.5, color: PopColors.text))),
+          if (ctx?.requesterName != null)
+            _row(
+              '誰が',
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(ctx!.requesterName!,
+                      style: const TextStyle(fontSize: 14, color: PopColors.text)),
+                  if (ctx.requesterOnBehalfOf != null)
+                    Text('${ctx.requesterOnBehalfOf} の依頼',
+                        style: const TextStyle(fontSize: 13, color: PopColors.text2)),
+                ],
+              ),
+            ),
+          if (ctx != null && ctx.participants.isNotEmpty)
+            _row(
+              '参加者',
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final p in ctx.participants)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 11, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: PopColors.fill2,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 6,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: _statusColor(p.status),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(p.name,
+                              style: const TextStyle(
+                                  fontSize: 13, color: PopColors.text)),
+                          if (p.status != null) ...[
+                            const SizedBox(width: 4),
+                            Text(p.status!,
+                                style: const TextStyle(
+                                    fontSize: 12, color: PopColors.text2)),
+                          ],
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          if (ctx?.sourceLabel != null)
+            _row(
+              '出典',
+              Text(
+                ctx!.sourceLabel! + (ctx.sourceUrl != null ? ' ↗' : ''),
+                style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: PopColors.blue),
+              ),
+            ),
+          if (impact?.costAmount != null && impact!.costCurrency != null)
+            _row(
+              '金額',
+              Text(
+                '${impact.costCurrency} ${_amount(impact.costAmount!)}',
+                style: const TextStyle(
+                    fontSize: 14, color: PopColors.text),
+              ),
+            ),
+          if (task.confidenceReasons.isNotEmpty)
+            _row(
+              '注意点',
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final r in task.confidenceReasons)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: PopColors.fill2,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(r,
+                          style: const TextStyle(
+                              fontSize: 12, color: PopColors.text2)),
+                    ),
+                ],
+              ),
+            ),
+          if (task.expiresAt != null)
+            _row(
+              '期限',
+              Text(
+                '${_formatDeadline(task.expiresAt!)} — ${_verb(task.onExpire)}',
+                style: const TextStyle(fontSize: 14, color: PopColors.text),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  static Color _statusColor(String? status) {
+    final s = (status ?? '').toLowerCase();
+    if (s.contains('free')) return PopColors.green;
+    if (s.contains('busy') || (status ?? '').contains('重複')) {
+      return PopColors.red;
+    }
+    return PopColors.text3;
+  }
+
+  static String _amount(double v) =>
+      v == v.roundToDouble() ? v.round().toString() : v.toStringAsFixed(2);
+
+  static String _verb(String? onExpire) => switch (onExpire) {
+        'approve' => '自動承認',
+        'reject' => '自動却下',
+        'escalate' => '緊急化',
+        _ => '自動破棄',
+      };
+
+  static String _formatDeadline(DateTime at) {
+    final local = at.toLocal();
+    return '${local.month}/${local.day} ${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+  }
+
+  Widget _row(String label, Widget value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.6,
+              color: PopColors.text3,
+            ),
+          ),
+          const SizedBox(height: 4),
+          value,
+        ],
+      ),
     );
   }
 }

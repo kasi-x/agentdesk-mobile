@@ -19,11 +19,11 @@ class DiffBox extends StatelessWidget {
   Color get _highlightColor {
     switch (properties['highlight']) {
       case 'critical':
-        return const Color(0xFFE0352B);
+        return PopColors.red;
       case 'warning':
-        return const Color(0xFFF0A726);
+        return PopColors.orange;
       default:
-        return const Color(0xFF5B8DEF);
+        return PopColors.blue;
     }
   }
 
@@ -53,7 +53,7 @@ class DiffBox extends StatelessWidget {
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
-        color: PopColors.pill,
+        color: PopColors.surface2,
         borderRadius: BorderRadius.circular(16),
         border: Border(left: BorderSide(color: _highlightColor, width: 4)),
       ),
@@ -74,7 +74,7 @@ class DiffBox extends StatelessWidget {
               child: Text(
                 title,
                 style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      color: const Color(0xFF565B4D),
+                      color: PopColors.text2,
                       fontWeight: FontWeight.w800,
                       letterSpacing: 0.3,
                     ),
@@ -201,7 +201,7 @@ class _ValuePair extends StatelessWidget {
                 style: const TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w800,
-                  color: Color(0xFF565B4D),
+                  color: PopColors.text2,
                   letterSpacing: 0.4,
                 ),
               ),
@@ -213,7 +213,7 @@ class _ValuePair extends StatelessWidget {
               before,
               style: const TextStyle(
                 fontSize: 13,
-                color: PopColors.diffBefore,
+                color: PopColors.red,
                 decoration: TextDecoration.lineThrough,
                 decorationColor: Color(0x8CC2321F),
               ),
@@ -224,7 +224,7 @@ class _ValuePair extends StatelessWidget {
               style: const TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w700,
-                color: PopColors.diffAfter,
+                color: PopColors.green,
               ),
             ),
           ],
@@ -250,14 +250,14 @@ class _ValueChips extends StatelessWidget {
         if (bv.kind == _ValueKind.datetime) ...[
           Row(
             children: [
-              const Icon(Icons.event, size: 15, color: PopColors.ink),
+              const Icon(Icons.event, size: 15, color: PopColors.text),
               const SizedBox(width: 6),
               Text(
                 bv.date,
                 style: const TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w800,
-                    color: PopColors.ink),
+                    color: PopColors.text),
               ),
             ],
           ),
@@ -270,15 +270,15 @@ class _ValueChips extends StatelessWidget {
           children: [
             _chip(
               background: const Color(0x141B1E16),
-              foreground: PopColors.inkSoft,
+              foreground: PopColors.text2,
               text: bv.kind == _ValueKind.money
                   ? '${bv.symbol}${_amount(bv.amount)}'
                   : bv.time,
               strike: true,
             ),
-            const Icon(Icons.arrow_forward, size: 15, color: Color(0xFF6B6F60)),
+            const Icon(Icons.arrow_forward, size: 15, color: PopColors.text3),
             _chip(
-              background: PopColors.ink,
+              background: PopColors.text,
               foreground: Colors.white,
               text: av.kind == _ValueKind.money
                   ? '${av.symbol}${_amount(av.amount)}'
@@ -298,7 +298,7 @@ class _ValueChips extends StatelessWidget {
                   style: const TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w800,
-                    color: PopColors.ink,
+                    color: PopColors.text,
                   ),
                 ),
               ),
@@ -329,6 +329,7 @@ class _ValueChips extends StatelessWidget {
         color: background,
         borderRadius: BorderRadius.circular(999),
       ),
+      clipBehavior: Clip.none,
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -388,7 +389,7 @@ class _DayTimeline extends StatelessWidget {
             style: const TextStyle(
               fontSize: 10,
               fontWeight: FontWeight.w600,
-              color: Color(0xFF6B6F60),
+              color: PopColors.text3,
               fontFeatures: [FontFeature.tabularFigures()],
             ),
           ),
@@ -405,7 +406,7 @@ class _DayTimeline extends StatelessWidget {
               Container(
                 height: 30,
                 decoration: BoxDecoration(
-                  color: const Color(0x141B1E16),
+                  color: const Color(0x29787880),
                   borderRadius: BorderRadius.circular(8),
                 ),
               ),
@@ -432,9 +433,9 @@ class _DayTimeline extends StatelessWidget {
           height: 22,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: before ? Colors.transparent : PopColors.ink,
+            color: before ? Colors.transparent : Colors.white,
             border: before
-                ? Border.all(color: const Color(0x801B1E16), width: 1.4)
+                ? Border.all(color: PopColors.text2, width: 1.4)
                 : null,
             borderRadius: BorderRadius.circular(6),
           ),
@@ -445,7 +446,7 @@ class _DayTimeline extends StatelessWidget {
             style: TextStyle(
               fontSize: 10,
               fontWeight: FontWeight.w800,
-              color: before ? PopColors.inkSoft : Colors.white,
+              color: before ? PopColors.text2 : PopColors.bg,
             ),
           ),
         ),
@@ -468,7 +469,7 @@ class _Inline extends StatelessWidget {
       margin: const EdgeInsets.fromLTRB(13, 0, 13, 13),
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
-        color: const Color(0xFF14170F),
+        color: PopColors.bg,
         borderRadius: BorderRadius.circular(10),
       ),
       child: Column(
@@ -483,10 +484,10 @@ class _Inline extends StatelessWidget {
                 fontSize: 12,
                 height: 1.5,
                 color: line.startsWith('+')
-                    ? const Color(0xFF3DDC84)
+                    ? PopColors.green
                     : line.startsWith('-')
-                        ? const Color(0xFFFF6B6B)
-                        : const Color(0xFF8A9080),
+                        ? PopColors.red
+                        : PopColors.text3,
               ),
             ),
         ],

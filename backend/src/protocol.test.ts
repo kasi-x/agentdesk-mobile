@@ -317,6 +317,51 @@ describe("decideAction under committing (I-104)", () => {
   });
 });
 
+describe("context block (裏面)", () => {
+  it("keeps a well-formed context", () => {
+    const result = validateTaskCard({
+      ...baseCard,
+      context: {
+        requester: { name: "Bさん", onBehalfOf: "リード" },
+        participants: [{ name: "Aさん", status: "busy" }, { name: "自分", status: "free" }],
+        reasoning: "重複のため",
+        source: { label: "Gmail", url: "https://mail.example.com/1" },
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.context?.requester?.name).toBe("Bさん");
+    expect(result.value.context?.participants).toHaveLength(2);
+    expect(result.value.context?.reasoning).toBe("重複のため");
+    expect(result.value.context?.source?.url).toBe("https://mail.example.com/1");
+  });
+
+  it("drops malformed pieces instead of rejecting (advisory data)", () => {
+    const result = validateTaskCard({
+      ...baseCard,
+      context: {
+        requester: { name: "" },
+        participants: [{ name: "x" }, "junk", { nope: 1 }],
+        reasoning: "",
+        source: { label: "L", url: "javascript:alert(1)" },
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.context?.requester).toBeUndefined();
+    expect(result.value.context?.participants).toHaveLength(1);
+    expect(result.value.context?.source?.url).toBeUndefined();
+    expect(result.value.context?.source?.label).toBe("L");
+  });
+
+  it("omits context entirely when nothing survives", () => {
+    const result = validateTaskCard({ ...baseCard, context: { reasoning: "" } });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.context).toBeUndefined();
+  });
+});
+
 describe("expiry policy (I-203)", () => {
   const past = "2026-01-01T00:00:00Z";
   const future = "2999-01-01T00:00:00Z";

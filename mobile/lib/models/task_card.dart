@@ -136,6 +136,75 @@ class CardImpact {
   }
 }
 
+/// Structured "back of the card" context (P1/P3): 誰が / 誰と / なぜ /
+/// どこから。Rendered in the expandable details panel; all optional.
+class ContextPerson {
+  final String name;
+  final String? status;
+
+  const ContextPerson({required this.name, this.status});
+
+  factory ContextPerson.fromJson(dynamic raw) {
+    if (raw is! Map) return const ContextPerson(name: '?');
+    return ContextPerson(
+      name: (raw['name'] as String?) ?? '?',
+      status: raw['status'] is String ? raw['status'] as String : null,
+    );
+  }
+}
+
+class TaskContext {
+  final String? requesterName;
+  final String? requesterOnBehalfOf;
+  final List<ContextPerson> participants;
+  final String? reasoning;
+  final String? sourceLabel;
+  final String? sourceUrl;
+
+  const TaskContext({
+    this.requesterName,
+    this.requesterOnBehalfOf,
+    this.participants = const <ContextPerson>[],
+    this.reasoning,
+    this.sourceLabel,
+    this.sourceUrl,
+  });
+
+  factory TaskContext.fromJson(dynamic raw) {
+    if (raw is! Map) return const TaskContext();
+    final requester =
+        raw['requester'] is Map ? raw['requester'] as Map : null;
+    final source = raw['source'] is Map ? raw['source'] as Map : null;
+    String? field(Map? m, String key) {
+      if (m == null) return null;
+      final v = m[key];
+      return v is String && v.isNotEmpty ? v : null;
+    }
+
+    String? safeUrl(String? url) =>
+        url != null && RegExp(r'^https?://').hasMatch(url) ? url : null;
+    final requesterName = field(requester, 'name');
+    final requesterOnBehalfOf = field(requester, 'onBehalfOf');
+    final sourceLabel = field(source, 'label');
+    final sourceUrl = safeUrl(field(source, 'url'));
+    final reasoning = field(raw, 'reasoning');
+    final participants = raw['participants'] is List
+        ? (raw['participants'] as List)
+            .map(ContextPerson.fromJson)
+            .where((p) => p.name != '?')
+            .toList()
+        : const <ContextPerson>[];
+    return TaskContext(
+      requesterName: requesterName,
+      requesterOnBehalfOf: requesterOnBehalfOf,
+      participants: participants,
+      reasoning: reasoning,
+      sourceLabel: sourceLabel,
+      sourceUrl: sourceUrl,
+    );
+  }
+}
+
 class TaskCard {
   final String taskId;
   final String nonce;
@@ -162,6 +231,8 @@ class TaskCard {
   /// approve | reject | escalate | drop — displayed next to the
   /// countdown; the hub decides at the deadline, never the client.
   final String? onExpire;
+  /// Structured back-of-card context (裏面) for the details panel.
+  final TaskContext? context;
 
   const TaskCard({
     required this.taskId,
@@ -182,6 +253,7 @@ class TaskCard {
     this.rejectReasons = const <RejectReason>[],
     this.expiresAt,
     this.onExpire,
+    this.context,
   });
 
   factory TaskCard.fromJson(dynamic raw) {
@@ -227,6 +299,7 @@ class TaskCard {
           : const <RejectReason>[],
       expiresAt: DateTime.tryParse(raw['expiresAt'] is String ? raw['expiresAt'] as String : ''),
       onExpire: raw['onExpire'] is String ? raw['onExpire'] as String : null,
+      context: raw['context'] is Map ? TaskContext.fromJson(raw['context']) : null,
     );
   }
 
@@ -307,6 +380,27 @@ class TaskCard {
           },
         if (expiresAt != null) 'expiresAt': expiresAt!.toUtc().toIso8601String(),
         if (onExpire != null) 'onExpire': onExpire,
+        if (context != null)
+          'context': <String, dynamic>{
+            if (context!.requesterName != null)
+              'requester': <String, dynamic>{
+                'name': context!.requesterName,
+                if (context!.requesterOnBehalfOf != null)
+                  'onBehalfOf': context!.requesterOnBehalfOf,
+              },
+            'participants': context!.participants
+                .map((p) => <String, dynamic>{
+                      'name': p.name,
+                      if (p.status != null) 'status': p.status,
+                    })
+                .toList(),
+            if (context!.reasoning != null) 'reasoning': context!.reasoning,
+            if (context!.sourceLabel != null)
+              'source': <String, dynamic>{
+                'label': context!.sourceLabel,
+                if (context!.sourceUrl != null) 'url': context!.sourceUrl,
+              },
+          },
       };
 }
 

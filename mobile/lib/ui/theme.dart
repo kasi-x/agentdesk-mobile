@@ -2,15 +2,15 @@ import 'package:flutter/material.dart';
 
 import 'colors.dart';
 
-/// Color-pop triage theme — warm dark chrome, amber CTA. The cards
-/// themselves carry severity color (see PopColors / task_card_view).
+/// Calm-iOS triage theme — neutral elevated surfaces, blue accent.
+/// Cards carry only the necessary information; color is meaning.
 final ThemeData triageTheme = ThemeData(
   useMaterial3: true,
   brightness: Brightness.dark,
   colorScheme: ColorScheme.fromSeed(
-    seedColor: PopColors.amber,
+    seedColor: PopColors.blue,
     brightness: Brightness.dark,
-    surface: PopColors.chrome,
+    surface: PopColors.surface,
   ),
   scaffoldBackgroundColor: PopColors.bg,
   appBarTheme: const AppBarTheme(
@@ -20,6 +20,6 @@ final ThemeData triageTheme = ThemeData(
   ),
   snackBarTheme: const SnackBarThemeData(
     behavior: SnackBarBehavior.floating,
-    backgroundColor: PopColors.chrome2,
+    backgroundColor: PopColors.surface2,
   ),
 );

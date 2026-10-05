@@ -33,6 +33,16 @@ export interface CardImpact {
   scope?: string;
 }
 
+/** Structured "back of the card" context (P1/P3): who asked, who is
+ *  affected, why, and where it came from. Rendered in the expandable
+ *  details panel — never required for a valid card. */
+export interface TaskContext {
+  requester?: { name: string; onBehalfOf?: string; avatarUrl?: string };
+  participants?: { name: string; status?: string }[];
+  reasoning?: string;
+  source?: { label: string; url?: string };
+}
+
 /// Agent-supplied candidate for "why was this rejected" (I-118).
 export interface RejectReason {
   id: string;
@@ -73,6 +83,9 @@ export interface TaskCardPayload {
   components: CardComponent[];
   actions: TaskCardActions;
   impact?: CardImpact;
+  /** Advisory display context for the details panel (裏面). Malformed
+   *  pieces are dropped by validation, never rejected. */
+  context?: TaskContext;
   /** ISO 8601 instant after which the hub executes the default
    *  behavior (I-203). Required for `onExpire`. */
   expiresAt?: string;
@@ -333,6 +346,57 @@ export function validateTaskCard(
     }
   }
 
+  // Advisory display context (裏面, P1/P3): who / why / who's affected /
+  // where from. Malformed pieces are dropped rather than rejected.
+  let context: TaskContext | undefined;
+  if (isRecord(body.context)) {
+    const raw = body.context;
+    const requester = isRecord(raw.requester) &&
+      typeof raw.requester.name === "string" && raw.requester.name.length > 0
+      ? {
+          name: raw.requester.name,
+          ...(typeof raw.requester.onBehalfOf === "string" && raw.requester.onBehalfOf.length > 0
+            ? { onBehalfOf: raw.requester.onBehalfOf }
+            : {}),
+          ...(typeof raw.requester.avatarUrl === "string" &&
+          /^https?:\/\//.test(raw.requester.avatarUrl)
+            ? { avatarUrl: raw.requester.avatarUrl }
+            : {}),
+        }
+      : undefined;
+    const participants = Array.isArray(raw.participants)
+      ? raw.participants.filter(
+          (p): p is { name: string; status?: string } =>
+            isRecord(p) &&
+            typeof p.name === "string" && p.name.length > 0 &&
+            (p.status === undefined || typeof p.status === "string"),
+        )
+      : [];
+    const reasoning =
+      typeof raw.reasoning === "string" && raw.reasoning.length > 0
+        ? raw.reasoning
+        : undefined;
+    const source =
+      isRecord(raw.source) &&
+      typeof raw.source.label === "string" && raw.source.label.length > 0
+        ? {
+            label: raw.source.label,
+            ...(typeof raw.source.url === "string" &&
+            /^https?:\/\//.test(raw.source.url)
+              ? { url: raw.source.url }
+              : {}),
+          }
+        : undefined;
+    if (requester || participants.length > 0 || reasoning || source) {
+      context = {
+        ...(requester ? { requester } : {}),
+        ...(participants.length > 0 ? { participants } : {}),
+        ...(reasoning !== undefined ? { reasoning } : {}),
+        ...(source ? { source } : {}),
+      };
+    }
+  }
+
   // I-202: optional structured impact block. Unknown/mistyped fields are
   // dropped rather than rejected — impact is advisory display data.
   let impact: CardImpact | undefined;
@@ -425,6 +489,7 @@ export function validateTaskCard(
     components: components as CardComponent[],
     actions,
     ...(impact !== undefined ? { impact } : {}),
+    ...(context !== undefined ? { context } : {}),
     ...(expiresAt !== undefined ? { expiresAt: expiresAt as string } : {}),
     ...(onExpire !== undefined ? { onExpire: onExpire as OnExpireAction } : {}),
   };

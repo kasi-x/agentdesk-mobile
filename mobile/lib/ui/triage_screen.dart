@@ -322,7 +322,7 @@ class _PendingBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: PopColors.amber,
+        color: PopColors.blue,
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
@@ -330,7 +330,7 @@ class _PendingBadge extends StatelessWidget {
         style: const TextStyle(
           fontSize: 12,
           fontWeight: FontWeight.w800,
-          color: PopColors.ink,
+          color: PopColors.text,
         ),
       ),
     );

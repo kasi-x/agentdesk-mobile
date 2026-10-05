@@ -109,6 +109,32 @@ void main() {
     expect(restored.onExpire, 'approve');
   });
 
+  test('parses the context block (裏面) and round-trips it', () {
+    final task = TaskCard.fromJson(<String, dynamic>{
+      ...reference,
+      'context': {
+        'requester': {'name': 'Bさん', 'onBehalfOf': 'リード'},
+        'participants': [
+          {'name': 'Aさん', 'status': 'busy 14:00'},
+          'junk',
+        ],
+        'reasoning': '重複のため',
+        'source': {'label': 'Gmail', 'url': 'javascript:alert(1)'},
+      },
+    });
+    expect(task.context?.requesterName, 'Bさん');
+    expect(task.context?.requesterOnBehalfOf, 'リード');
+    expect(task.context?.participants.single.name, 'Aさん');
+    expect(task.context?.reasoning, '重複のため');
+    // javascript: URLs are dropped, label survives
+    expect(task.context?.sourceLabel, 'Gmail');
+    expect(task.context?.sourceUrl, isNull);
+
+    final restored = TaskCard.fromJson(task.toJson());
+    expect(restored.context?.requesterName, 'Bさん');
+    expect(restored.context?.sourceUrl, isNull);
+  });
+
   test('missing or malformed expiry fields stay null (I-203)', () {
     final task = TaskCard.fromJson(reference);
     expect(task.expiresAt, isNull);
