@@ -8,6 +8,7 @@ import '../config.dart';
 import '../models/task_card.dart';
 import '../models/triage_action.dart';
 import 'hub_api.dart';
+import 'priority.dart';
 import 'sse_client.dart';
 
 /// Owns the triage stack: optimistic removal (FR-2.1), async delivery +
@@ -20,6 +21,7 @@ class TaskRepository extends ChangeNotifier {
   HubConfig _config;
   SseClient? _sse;
   List<TaskCard> _stack = <TaskCard>[];
+  StackOrder _order = StackOrder.urgent;
   final Set<String> _snoozedIds = <String>{};
   List<TriageActionReply> _queue = <TriageActionReply>[];
   /// Cards triaged this session, kept for undo (I-104). Insertion order
@@ -35,6 +37,7 @@ class TaskRepository extends ChangeNotifier {
   List<TaskCard> get stack => List.unmodifiable(_stack);
   int get pendingCount => _stack.length;
   HubConfig get config => _config;
+  StackOrder get order => _order;
   bool get hasQueuedActions => _queue.isNotEmpty;
   String? get lastToast => _lastToast;
   int get toastSeq => _toastSeq;
@@ -52,7 +55,34 @@ class TaskRepository extends ChangeNotifier {
   // ------------------------------------------------------------------
   // Lifecycle
 
-  void start() => _connectSse();
+  void start() {
+    unawaited(_loadOrder());
+    _connectSse();
+  }
+
+  static const String _orderPrefsKey = 'stack_order';
+
+  Future<void> _loadOrder() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString(_orderPrefsKey);
+    if (saved == null) return;
+    final loaded = StackOrder.values.asNameMap()[saved];
+    if (loaded == null || loaded == _order) return;
+    _order = loaded;
+    // 起動時のスナップショットより後に解決しうるため、確定時点で並べ直す。
+    _restack();
+    notifyListeners();
+  }
+
+  /// 山札の並び順を切り替える（緊急順 / 新しい順 / エージェント順）。
+  Future<void> setOrder(StackOrder order) async {
+    if (_order == order) return;
+    _order = order;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_orderPrefsKey, order.name);
+    _restack();
+    notifyListeners();
+  }
 
   void _connectSse() {
     _sse?.dispose();
@@ -224,6 +254,24 @@ class TaskRepository extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 現在の並び順モードで山札を並べ直す。ローカルでスヌーズしたカードは
+  /// どのモードでも山札の末尾に固定（既存動作を維持）。
+  void _restack() {
+    final now = DateTime.now();
+    final nonSnoozed = <TaskCard>[
+      for (final t in _stack)
+        if (!_snoozedIds.contains(t.taskId)) t,
+    ];
+    final snoozed = <TaskCard>[
+      for (final t in _stack)
+        if (_snoozedIds.contains(t.taskId)) t,
+    ];
+    _stack = <TaskCard>[
+      ...sortTasks(nonSnoozed, _order, now),
+      ...sortTasks(snoozed, _order, now),
+    ];
+  }
+
 
   /// Delivers a reply, queueing on network failure. Returns the send
   /// result so callers can tailor their toast (undo offers I-104).
@@ -255,6 +303,8 @@ class TaskRepository extends ChangeNotifier {
     final task = _stack.removeAt(index);
     _snoozedIds.add(taskId);
     _stack.add(task);
+    // スヌーズ集合は末尾に固定しつつ、内部は現在の並び順に従う。
+    _restack();
     notifyListeners();
   }
 
@@ -301,14 +351,11 @@ class TaskRepository extends ChangeNotifier {
     final queuedIds = _queue.map((r) => r.taskId).toSet();
     final fresh =
         tasks.where((t) => !queuedIds.contains(t.taskId)).toList();
-    fresh.sort((a, b) => b.createdAt.compareTo(a.createdAt));
     _snoozedIds.removeWhere(
       (id) => !fresh.any((t) => t.taskId == id),
     );
-    _stack = <TaskCard>[
-      ...fresh.where((t) => !_snoozedIds.contains(t.taskId)),
-      ...fresh.where((t) => _snoozedIds.contains(t.taskId)),
-    ];
+    _stack = fresh;
+    _restack();
     notifyListeners();
   }
 
@@ -319,14 +366,12 @@ class TaskRepository extends ChangeNotifier {
     final index = _stack.indexWhere((t) => t.taskId == task.taskId);
     if (index != -1) {
       _stack[index] = task;
-      notifyListeners();
-      return;
-    }
-    if (_snoozedIds.contains(task.taskId)) {
-      _stack.add(task);
     } else {
-      _stack.insert(0, task);
+      _stack.add(task);
     }
+    // 新規は末尾に積み、既存（I-203 escalate など）は置換後に
+    // 現在のモードで並べ直す。
+    _restack();
     notifyListeners();
   }
 

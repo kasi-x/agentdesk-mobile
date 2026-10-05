@@ -11,6 +11,7 @@ const LS_HUB = 'agentdesk.hub';
 const LS_TOKEN = 'agentdesk.token';
 const LS_QUEUE = 'agentdesk.offlineQueue';
 const LS_SNOOZED = 'agentdesk.snoozedIds';
+const LS_ORDER = 'agentdesk.order';
 
 const BACKOFF_INIT_MS = 1000;
 const BACKOFF_MAX_MS = 30_000;
@@ -28,11 +29,13 @@ function riskLevel(task) {
 
 /* ---------------- state ---------------- */
 
-/** Newest-first pending stack; snoozed tasks sit at the tail. */
+/** Pending stack ordered by state.order (default 緊急順); snoozed tasks sit
+ *  at the tail, themselves ordered by the active mode. */
 const state = {
   hub: localStorage.getItem(LS_HUB) || location.origin,
   token: localStorage.getItem(LS_TOKEN) || '',
   stack: [], // TaskCard[]
+  order: localStorage.getItem(LS_ORDER) || 'urgent', // 'urgent'|'newest'|'agent'
   snoozedIds: new Set(readJson(LS_SNOOZED, [])),
   queue: readJson(LS_QUEUE, []), // ActionReply[] persisted FIFO
   es: null,
@@ -57,6 +60,52 @@ function persistQueue() {
 
 function persistSnoozed() {
   localStorage.setItem(LS_SNOOZED, JSON.stringify([...state.snoozedIds]));
+}
+
+function persistOrder() {
+  localStorage.setItem(LS_ORDER, state.order);
+}
+
+/** Re-sort the stack by the active mode; snoozed ids stay pinned at the tail.
+ *  Non-snoozed and snoozed subsets are each sorted, then concatenated.
+ *  Guarded: a stale cache that misses priority.js must not blank the page. */
+function applyOrder() {
+  if (typeof sortTasks !== 'function') return;
+  const non = [];
+  const snoozed = [];
+  for (const t of state.stack) {
+    (state.snoozedIds.has(t.taskId) ? snoozed : non).push(t);
+  }
+  const now = Date.now();
+  state.stack = sortTasks(non, state.order, now).concat(sortTasks(snoozed, state.order, now));
+}
+
+const ORDER_LABELS = { urgent: '緊急順', newest: '新しい順', agent: 'エージェント順' };
+const ORDER_CYCLE = ['urgent', 'newest', 'agent'];
+
+function updateOrderLabel() {
+  const label = document.getElementById('order-label');
+  if (label) label.textContent = ORDER_LABELS[state.order] || ORDER_LABELS.urgent;
+}
+
+/** 並び替えモードを切り替えて永続化し、山札を並べ直す。 */
+function setOrder(mode) {
+  state.order = ORDER_LABELS[mode] ? mode : 'urgent';
+  persistOrder();
+  applyOrder();
+  updateOrderLabel();
+  render();
+  toast(`並び替え: ${ORDER_LABELS[state.order]}`);
+}
+
+function wireOrder() {
+  updateOrderLabel();
+  const btn = document.getElementById('order-toggle');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    const i = ORDER_CYCLE.indexOf(state.order);
+    setOrder(ORDER_CYCLE[(i + 1) % ORDER_CYCLE.length]);
+  });
 }
 
 /* ---------------- tiny DOM helpers (textContent only) ---------------- */
@@ -155,7 +204,8 @@ async function undo(taskId) {
   if (qi >= 0) {
     state.queue.splice(qi, 1);
     persistQueue();
-    state.stack.unshift(task);
+    state.stack.push(task);
+    applyOrder();
     render();
     toast('元に戻しました（送信前の操作を取り消し）');
     return;
@@ -237,19 +287,20 @@ function queuedTaskIds() {
   return new Set(state.queue.map((r) => r.taskId));
 }
 
-/** Rebuild stack from a server snapshot (oldest→newest array). */
+/** Rebuild stack from a server snapshot (oldest→newest array). Sorts by the
+ *  active mode; locally snoozed ids move to the tail. */
 function applySnapshot(tasks) {
   const queued = queuedTaskIds();
   const pending = (tasks || []).filter(
     (t) => t && t.taskId && !queued.has(t.taskId),
   );
-  // Newest first; locally snoozed ids move to the tail.
   const fresh = [];
   const snoozed = [];
-  for (const t of pending.slice().reverse()) {
+  for (const t of pending) {
     (state.snoozedIds.has(t.taskId) ? snoozed : fresh).push(t);
   }
-  state.stack = fresh.concat(snoozed);
+  const now = Date.now();
+  state.stack = sortTasks(fresh, state.order, now).concat(sortTasks(snoozed, state.order, now));
   render();
 }
 
@@ -260,6 +311,7 @@ function snooze(task) {
   state.snoozedIds.add(t.taskId);
   persistSnoozed();
   state.stack.push(t);
+  applyOrder();
   render();
   toast('スヌーズ — 山札の最後尾へ');
 }
@@ -301,13 +353,11 @@ function connect() {
       // rotated nonce + bumped severity) — the hub is the single source
       // of truth (P9), so replace in place instead of ignoring.
       const i = state.stack.findIndex((t) => t.taskId === task.taskId);
-      if (i >= 0) {
-        state.stack[i] = task;
-        render();
-        return;
-      }
-      if (state.snoozedIds.has(task.taskId)) state.stack.push(task);
-      else state.stack.unshift(task);
+      if (i >= 0) state.stack[i] = task;
+      else state.stack.push(task);
+      // 新しいカードもスヌーズ済みカードも applyOrder() が正しい位置へ運ぶ
+      // (スヌーズ済みは末尾に固定)。
+      applyOrder();
       render();
     } catch {
       /* ignore malformed event */
@@ -1216,4 +1266,5 @@ async function bootstrap() {
 
 document.getElementById('sheet-backdrop').addEventListener('click', closeInspect);
 wireSettings();
+wireOrder();
 bootstrap();
