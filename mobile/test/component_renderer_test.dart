@@ -47,6 +47,10 @@ void main() {
     expect(find.byIcon(Icons.event), findsOneWidget);
     expect(find.text('10月5日(月)'), findsOneWidget);
     expect(find.text('+2時間30分'), findsOneWidget);
+    // day timeline: before slot (dashed) vs after slot (filled)
+    expect(find.textContaining('変更前'), findsOneWidget);
+    expect(find.textContaining('変更後'), findsOneWidget);
+    expect(find.text('14:00'), findsNWidgets(2)); // chip + timeline tick
     expect(find.text('対象'), findsOneWidget);
     expect(find.text('UserA'), findsOneWidget);
     expect(find.text('→ UserB'), findsOneWidget);

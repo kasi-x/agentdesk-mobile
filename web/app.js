@@ -476,7 +476,46 @@ function valueChip(v, isBefore) {
   return chip;
 }
 
-function renderValuePair(parent, label, beforeRaw, afterRaw) {
+/* その日の予定表で「どこからどこへ動いたか」を描く: 変更前の枠(破線)と
+ * 変更後の枠(塗り)を時間軸上に重ねる。Event duration は properties.duration
+ * (分, 既定60)。すべて表示上の計算で、実データには触れない。 */
+function dayTimeline(bv, av, durationMin) {
+  const dur = Number.isFinite(durationMin) && durationMin > 0 ? durationMin : 60;
+  const b = minutesOf(bv.time);
+  const a = minutesOf(av.time);
+  let start = Math.max(0, Math.floor(Math.min(b, a) / 60) * 60);
+  let end = Math.min(24 * 60, Math.ceil((Math.max(b, a) + dur) / 60) * 60);
+  if (end - start < 120) {
+    start = Math.max(0, end - 120);
+  }
+  const span = end - start;
+  const pos = (m) => ((m - start) / span) * 100;
+
+  const track = el('div', 'dvv-tl');
+  const bars = el('div', 'dvv-tl-bars');
+  const beforeBar = el('div', 'dvv-tl-bar before', `変更前 ${bv.time}`);
+  beforeBar.style.left = `${pos(b)}%`;
+  beforeBar.style.width = `${(dur / span) * 100}%`;
+  const afterBar = el('div', 'dvv-tl-bar after', `変更後 ${av.time}`);
+  afterBar.style.left = `${pos(a)}%`;
+  afterBar.style.width = `${(dur / span) * 100}%`;
+  bars.append(beforeBar, afterBar);
+  track.appendChild(bars);
+
+  const ticks = el('div', 'dvv-tl-ticks');
+  for (let t = start; t <= end; t += 60) {
+    const tick = el('span', 'dvv-tl-tick');
+    tick.style.left = `${pos(t)}%`;
+    tick.appendChild(el('span', 'dvv-tl-tickline'));
+    tick.appendChild(el('span', 'dvv-tl-ticklabel',
+      `${String(Math.floor(t / 60) % 24).padStart(2, '0')}:00`));
+    ticks.appendChild(tick);
+  }
+  track.appendChild(ticks);
+  return track;
+}
+
+function renderValuePair(parent, label, beforeRaw, afterRaw, opts = {}) {
   const row = el('div', 'diffbox-row');
   if (label) row.appendChild(el('div', 'diffbox-rowlabel', label));
   const bv = parseValue(beforeRaw);
@@ -495,6 +534,9 @@ function renderValuePair(parent, label, beforeRaw, afterRaw) {
     const delta = deltaLabel(bv, av);
     if (delta) chips.appendChild(el('span', 'dvv-delta', delta));
     row.appendChild(chips);
+    if (bv.kind === 'datetime' && bv.dateKey === av.dateKey) {
+      row.appendChild(dayTimeline(bv, av, opts.durationMin));
+    }
   } else {
     row.appendChild(el('div', 'diff-before', beforeRaw || ''));
     row.appendChild(el('div', 'diff-after', `→ ${afterRaw || ''}`));
@@ -521,11 +563,12 @@ function renderComponent(comp, task) {
       if (p.title && typeof p.title === 'string') {
         wrap.appendChild(el('div', 'diffbox-title', p.title));
       }
-      renderValuePair(wrap, null, p.before, p.after);
+      const pairOpts = { durationMin: Number(p.duration) };
+      renderValuePair(wrap, null, p.before, p.after, pairOpts);
       if (Array.isArray(p.rows)) {
         for (const r of p.rows) {
           if (!r || typeof r !== 'object') continue;
-          renderValuePair(wrap, r.label || null, r.before, r.after);
+          renderValuePair(wrap, r.label || null, r.before, r.after, pairOpts);
         }
       }
       if (typeof p.inline === 'string' && p.inline) {

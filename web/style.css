@@ -867,6 +867,72 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* day timeline: where the event moved on that day's schedule */
+.dvv-tl {
+  margin-top: 10px;
+}
+
+.dvv-tl-bars {
+  position: relative;
+  height: 30px;
+  background: rgba(27, 30, 22, 0.07);
+  border-radius: 8px;
+}
+
+.dvv-tl-bar {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.dvv-tl-bar.before {
+  border: 1.5px dashed rgba(27, 30, 22, 0.5);
+  color: var(--ink-soft);
+}
+
+.dvv-tl-bar.after {
+  background: var(--ink);
+  color: #fff;
+}
+
+.dvv-tl-ticks {
+  position: relative;
+  height: 14px;
+  margin-top: 3px;
+}
+
+.dvv-tl-tick {
+  position: absolute;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transform: translateX(-50%);
+}
+
+.dvv-tl-tickline {
+  width: 1px;
+  height: 3px;
+  background: rgba(27, 30, 22, 0.25);
+}
+
+.dvv-tl-ticklabel {
+  font-size: 10px;
+  font-weight: 600;
+  color: #6b6f60;
+  font-variant-numeric: tabular-nums;
+}
+
 .diff-before {
   color: #c2321f;
   text-decoration: line-through;

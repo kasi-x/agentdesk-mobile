@@ -114,7 +114,7 @@
         impact: { summary: '定例ミーティングを 16:30 に変更して全員に通知します', reversible: true },
         components: [
           { id: 'root', component: 'TriageCard', children: ['diff', 'reason'] },
-          { id: 'diff', component: 'DiffBox', properties: { title: '定例ミーティング時間', before: '2026-10-05 14:00', after: '2026-10-05 16:30', highlight: 'warning' } },
+          { id: 'diff', component: 'DiffBox', properties: { title: '定例ミーティング時間', before: '2026-10-05 14:00', after: '2026-10-05 16:30', highlight: 'warning', duration: 60 } },
           { id: 'reason', component: 'Text', properties: { text: '参加者3名中2名が14:00に重複予定があるため、全員が空いている16:30への変更を提案します。', variant: 'caption' } },
         ],
         actions: {
