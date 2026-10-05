@@ -17,13 +17,27 @@ Key surfaces (single page): focused TriageCard + queue of mini rows + inspect bo
 5. **Countdown = display only**: expiry strip shows what the hub will do (自動承認/自動却下/緊急化/破棄) and must always read as "automatic", never as a fake human decision.
 6. **No code rendering**: every payload string is text (NFR-2.1); external-origin text sits in the italic quote block, visually separated from system UI (NFR-2.2).
 
-## Visual language (current baseline to respect or deliberately evolve)
+## Visual language — "color-pop" (2026-10, user-approved direction)
 
-- Dark, near-black blue-charcoal page (`#0b0e14`), card surfaces `#171b24`, hairline borders `#2a3242` — elevation comes from borders and one soft sheet shadow, not heavy drop shadows.
-- Accent `#5b8def` (info/primary), semantic green `#3ddc84` / yellow `#f5c451` / red `#ff5b5b` with ~0.12–0.18 alpha tint backgrounds for badges/strips.
-- System font stack incl. Hiragino/Noto Sans JP; scale 11–16px; weights 400/600/700.
-- Radii: 16px cards, 18px sheet top, 999px pills. Max content width 520px.
-- Motion: minimal — toast slide, 0.2s dot transition, hold-progress fill. 0ms-optimistic feel; nothing bouncy.
+Reference: bold color-coded task cards on warm dark chrome with pill UI.
+
+- **The card surface IS the severity**: lime gradient `#D6EC86→#C2DF5F` = info,
+  amber `#F7D452→#EFBA2F` = warning, coral `#F4695C→#E94A3D` = critical.
+  Near-black ink text (`#1B1E16`) on the card; chrome stays warm dark
+  (`#191B16` bg, `#23251F` surfaces).
+- White pills (`rgba(255,255,255,.93)`) carry content components (DiffBox,
+  external quotes); dark pills (`rgba(20,22,16,.92)`) carry actions with
+  lime/coral icon accents; amber `#F5C842` is the CTA (pending pill,
+  Inspect, 修正して承認, segmented selection).
+- Urgent countdown flips to a white pill with red text; soon = white pill
+  with dark amber.
+- Inter + Hiragino/Noto Sans JP; tabular-nums for all numeric meta;
+  uppercase tracked micro-labels.
+- Radii: 24px cards, 24px sheet top, 999px pills. Max content width 540px.
+- Motion (meaning-serving, reduced-motion-safe): spring entrances
+  `cubic-bezier(.22,1.2,.36,1)` (card 280ms, sheet 300ms), staggered queue
+  minis 30ms, press `scale(.96)`, urgent pulse, connected-dot breathing.
+- Flutter mirror: `mobile/lib/ui/colors.dart` (PopColors) + `theme.dart`.
 
 ## Motion patterns allowed
 
