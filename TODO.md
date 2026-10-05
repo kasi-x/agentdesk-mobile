@@ -20,7 +20,6 @@
 
 ## Next — 捌く量を減らす(P8)と、エージェントへの返事の質
 
-- [ ] **並び順を緊急順に** (I-123, I-206) — 今は新しい順固定
 - [ ] **サーバー側スヌーズ** (既知の逸脱) — `POST /api/v1/actions` に `snooze` アクションと `until`、
       全端末で同期、DO alarm で再浮上
 - [ ] **カードの更新と取り下げ** (I-204, I-205) — `updateTaskCard` / `withdrawTask`、nonce の作り直し
@@ -61,7 +60,13 @@
 
 ## Done
 
-- [x] **期限** (I-203): protocol に `expiresAt` / `onExpire`(approve/reject/escalate/drop、
+- [x] **並び順を緊急順に** (I-123, I-206): 緊急順(既定)/新しい順/エージェント順の
+      切替。優先度スコアはクライアント側で算出(プロトコル変更なし):
+      期限40・severity25・金額15(log10)・信頼度の逆数10・待ち時間15。
+      JS (`web/priority.js`) と Dart (`mobile/lib/services/priority.dart`) で同一式。
+      web はトップバーのサイクルボタン + localStorage 永続化、mobile は AppBar の
+      PopupMenuButton + SharedPreferences 永続化。スヌーズ済みは全モードで末尾固定、
+      escalate 再配信でスコア再計算して再整列。node:test 7件 + flutter_test 11件追加。
       既定 drop、malformed は 400)。hub の統合 alarm に期限を追加 — approve/reject は
       宣言済みスワイプバインディングを undo 猶予なしで即実行、drop は replyUrl へ
       `expire/EXPIRED` を返信、escalate は nonce ローテ+severity critical で再配信

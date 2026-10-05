@@ -133,6 +133,11 @@ body {
   display: block;
 }
 
+/* 並び替えモード表示(緊急順/新しい順/エージェント順)が改行しないように */
+#order-label {
+  white-space: nowrap;
+}
+
 @keyframes dot-breath {
   50% {
     box-shadow: 0 0 0 5px rgba(48, 209, 88, 0.08);
