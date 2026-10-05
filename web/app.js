@@ -357,6 +357,31 @@ function setConnected(on) {
 
 const ORDERED_CATALOG = new Set(['Text', 'DiffBox', 'Chips']);
 
+/* Animate UI counting-number, translated: tween the pending count so a
+ * batch of dismissals ticks down instead of jumping. */
+let _pendingShown = null;
+let _pendingRaf = 0;
+
+function setPendingCount(target) {
+  const el = document.getElementById('pending-count');
+  const from = _pendingShown;
+  _pendingShown = target;
+  if (from === null || from === target) {
+    el.textContent = `${target} pending`;
+    return;
+  }
+  cancelAnimationFrame(_pendingRaf);
+  const start = performance.now();
+  const DURATION = 420;
+  const step = (now) => {
+    const t = Math.min(1, (now - start) / DURATION);
+    const eased = 1 - Math.pow(1 - t, 3); // easeOutCubic
+    el.textContent = `${Math.round(from + (target - from) * eased)} pending`;
+    if (t < 1) _pendingRaf = requestAnimationFrame(step);
+  };
+  _pendingRaf = requestAnimationFrame(step);
+}
+
 function timeAgo(iso) {
   const t = new Date(iso);
   if (Number.isNaN(t.getTime())) return '';
@@ -677,7 +702,7 @@ function render() {
   const count = document.getElementById('pending-count');
   if (state.stack.length) {
     count.hidden = false;
-    count.textContent = `${state.stack.length} pending`;
+    setPendingCount(state.stack.length);
   } else {
     count.hidden = true;
   }

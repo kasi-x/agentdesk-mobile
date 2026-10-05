@@ -46,4 +46,11 @@ abstract final class PopColors {
         'warning' => (warningTop, warningBottom),
         _ => (infoTop, infoBottom),
       };
+
+  /// Ambient glow behind the card, tinted by severity.
+  static Color severityGlow(String severity) => switch (severity) {
+        'critical' => const Color(0x5CE94A3D),
+        'warning' => const Color(0x52EFBA2F),
+        _ => const Color(0x57C6DF5F),
+      };
 }

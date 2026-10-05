@@ -40,11 +40,18 @@
     0 3px 10px rgba(0, 0, 0, 0.28);
   --shadow-sheet: 0 -16px 48px rgba(0, 0, 0, 0.55);
   --radius-card: 24px;
-  --spring: cubic-bezier(0.22, 1.2, 0.36, 1);
+  /* Animate UI spring (framer stiffness 200 / damping 20), sampled */
+  --spring: cubic-bezier(0.22, 1.16, 0.36, 1);
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
     "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
   --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
     "Liberation Mono", monospace;
+}
+
+@supports (animation-timing-function: linear(0, 1)) {
+  :root {
+    --spring: linear(0.0000 0.00%, 0.0999 3.57%, 0.3094 7.14%, 0.5353 10.71%, 0.7288 14.29%, 0.8719 17.86%, 0.9649 21.43%, 1.0166 25.00%, 1.0390 28.57%, 1.0430 32.14%, 1.0373 35.71%, 1.0278 39.29%, 1.0182 42.86%, 1.0103 46.43%, 1.0045 50.00%, 1.0009 53.57%, 0.9990 57.14%, 0.9982 60.71%, 0.9982 64.29%, 0.9985 67.86%, 0.9989 71.43%, 0.9993 75.00%, 0.9996 78.57%, 0.9998 82.14%, 1.0000 85.71%, 1.0001 89.29%, 1.0001 92.86%, 1.0001 96.43%, 1.0001 100.00%);
+  }
 }
 
 * {
@@ -209,13 +216,38 @@ body {
 }
 
 .btn.primary {
+  position: relative;
+  overflow: hidden;
   background: var(--accent);
   border-color: transparent;
   color: var(--ink);
 }
 
+/* Animate UI Shine: light sweep, skewX(-15deg), ease [.4, 0, .2, 1] */
+.btn.primary::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, rgba(255, 255, 255, 0.55), transparent);
+  opacity: 0.65;
+  transform: translateX(-135%) skewX(-15deg);
+}
+
+@media (hover: hover) {
+  .btn.primary:hover::after {
+    animation: shine-sweep 1.1s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+}
+
+@keyframes shine-sweep {
+  to {
+    transform: translateX(135%) skewX(-15deg);
+  }
+}
+
 .btn.primary:hover {
-  filter: brightness(1.06);
+  filter: brightness(1.05);
 }
 
 .btn.ok {
@@ -378,10 +410,24 @@ body {
 }
 
 /* ---------- card: the card IS the severity color ---------- */
+/* Animate UI blur reveal (spring 200/20, blur 10 -> 0) */
 @keyframes card-in {
   from {
     opacity: 0;
-    transform: translateY(16px) scale(0.98);
+    transform: translateY(14px) scale(0.985);
+    filter: blur(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: blur(0);
+  }
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(7px);
   }
   to {
     opacity: 1;
@@ -395,25 +441,56 @@ body {
   background: linear-gradient(170deg, var(--card-bg1, #2b2e27), var(--card-bg2, var(--chrome)));
   border-radius: var(--radius-card);
   overflow: hidden;
-  box-shadow: var(--shadow-card);
-  animation: card-in 0.28s var(--spring) both;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.32),
+    0 24px 60px -18px var(--card-glow, rgba(0, 0, 0, 0.5)),
+    var(--shadow-card);
+  animation: card-in 0.62s var(--spring) backwards;
+  transition: transform 0.22s var(--spring), box-shadow 0.22s ease;
 }
+
+@media (hover: hover) and (min-width: 768px) {
+  .card:hover {
+    transform: translateY(-2px);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.32),
+      0 30px 70px -18px var(--card-glow, rgba(0, 0, 0, 0.55)),
+      var(--shadow-card);
+  }
+}
+
+/* Per-element stagger inside the card (40ms steps, subtle rise) */
+.card-inner > * {
+  animation: rise-in 0.46s var(--spring) backwards;
+}
+
+.card-inner > *:nth-child(1) { animation-delay: 0.06s; }
+.card-inner > *:nth-child(2) { animation-delay: 0.1s; }
+.card-inner > *:nth-child(3) { animation-delay: 0.14s; }
+.card-inner > *:nth-child(4) { animation-delay: 0.18s; }
+.card-inner > *:nth-child(5) { animation-delay: 0.22s; }
+.card-inner > *:nth-child(6) { animation-delay: 0.26s; }
+.card-inner > *:nth-child(7) { animation-delay: 0.3s; }
+.card-inner > *:nth-child(n + 8) { animation-delay: 0.34s; }
 
 .card.sev-info {
   --card-bg1: var(--sev-info-1);
   --card-bg2: var(--sev-info-2);
+  --card-glow: rgba(198, 223, 95, 0.34);
   color: var(--ink);
 }
 
 .card.sev-warning {
   --card-bg1: var(--sev-warning-1);
   --card-bg2: var(--sev-warning-2);
+  --card-glow: rgba(239, 186, 47, 0.32);
   color: var(--ink);
 }
 
 .card.sev-critical {
   --card-bg1: var(--sev-critical-1);
   --card-bg2: var(--sev-critical-2);
+  --card-glow: rgba(233, 74, 61, 0.36);
   color: var(--ink);
 }
 
@@ -932,7 +1009,7 @@ body {
   align-items: center;
   gap: 10px;
   transition: border-color 0.16s ease, transform 0.16s ease;
-  animation: mini-in 0.3s var(--spring) both;
+  animation: mini-in 0.34s var(--spring) backwards;
 }
 
 .mini:nth-child(2) { animation-delay: 0.03s; }
@@ -1177,11 +1254,13 @@ body {
 @keyframes toast-in {
   from {
     opacity: 0;
-    transform: translateY(10px) scale(0.94);
+    transform: translateY(10px) scale(0.95);
+    filter: blur(6px);
   }
   to {
     opacity: 1;
     transform: none;
+    filter: blur(0);
   }
 }
 
