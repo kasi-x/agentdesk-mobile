@@ -356,9 +356,9 @@ class _ValueChips extends StatelessWidget {
 
 /// Day timeline (mirror of web dayTimeline): the SLOT MOVES. Ghost slot
 /// (変更前 [b, b+dur], dashed) + the white slot that slides from the
-/// ghost position into place (変更後 [a, a+dur]), with a displacement
-/// bracket (+delta) above and both boundaries of both slots ticked below
-/// — changing the time moves the start AND the end.
+/// ghost position into place (変更後 [a, a+dur]); both boundaries of
+/// both slots ticked below — changing the time moves the start AND the
+/// end. The delta chip rides the chips row above.
 class _DayTimeline extends StatelessWidget {
   final String beforeTime;
   final String afterTime;
@@ -381,47 +381,13 @@ class _DayTimeline extends StatelessWidget {
     double frac(int m) => ((m - start) / span).clamp(0.0, 1.0);
     String fmt(int m) =>
         '${(m ~/ 60) % 24}:${(m % 60).toString().padLeft(2, '0')}';
-    final gapStart = math.min(b + durationMin, a);
-    final gapEnd = math.max(b + durationMin, a);
-    final delta = _deltaLabelFor(b, a, durationMin);
-
     return Padding(
       padding: const EdgeInsets.only(top: 10),
       child: Column(
         children: [
-          // displacement bracket (ghost end → slot start)
-          SizedBox(
-            height: 22,
-            child: Stack(
-              children: [
-                _bracketLine(frac(gapStart), frac(gapEnd)),
-                Align(
-                  alignment:
-                      Alignment(((frac(gapStart) + frac(gapEnd)) / 2) * 2 - 1, 0),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 9, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: PopColors.fill2,
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: Text(
-                      delta,
-                      style: const TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: PopColors.text,
-                        fontFeatures: [FontFeature.tabularFigures()],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
           // the track: ghost + sliding slot
           SizedBox(
-            height: 44,
+            height: 38,
             child: Stack(
               children: [
                 Positioned.fill(
@@ -500,15 +466,6 @@ class _DayTimeline extends StatelessWidget {
     );
   }
 
-  String _deltaLabelFor(int b, int a, int dur) {
-    final diff = a - b;
-    final sign = diff >= 0 ? '+' : '−';
-    final abs = diff.abs();
-    final h = abs ~/ 60;
-    final mm = abs % 60;
-    return sign + (h > 0 ? '$h時間${mm > 0 ? '$mm分' : ''}' : '$mm分');
-  }
-
   /// Left edge exactly at [leftFrac]: solve Align's placement
   /// (1 - widthFactor)(a + 1)/2 = leftFrac for a.
   Widget _slotBar({
@@ -558,32 +515,6 @@ class _DayTimeline extends StatelessWidget {
     );
   }
 
-  Widget _bracketLine(double startFrac, double endFrac) {
-    final w = (endFrac - startFrac).clamp(0.0, 1.0);
-    if (w <= 0.01) return const SizedBox.shrink();
-    final a = 2 * startFrac / (1 - w) - 1;
-    return Align(
-      alignment: Alignment(a, 0),
-      child: FractionallySizedBox(
-        widthFactor: w,
-        child: Stack(
-          children: [
-            Container(
-              height: 1,
-              margin: const EdgeInsets.only(top: 11),
-              color: const Color(0x66EBEBF5),
-            ),
-            const Positioned(
-              right: 0,
-              top: 7,
-              child: Icon(Icons.arrow_forward_ios,
-                  size: 8, color: Color(0x66EBEBF5)),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 /// Unified-diff style block: `+` lines green, `-` lines red, everything
