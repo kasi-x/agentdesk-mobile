@@ -725,11 +725,12 @@ function renderCard(task) {
     const wrap = el('div', 'details');
     const toggle = el('button', 'details-toggle');
     toggle.type = 'button';
-    const label = el('span', 'details-label', '詳細を見る');
+    const expanded = expandedIds.has(task.taskId);
+    const label = el('span', 'details-label', expanded ? '詳細を隠す' : '詳細を見る');
     const chev = el('span', 'details-chev');
     toggle.append(label, chev);
-    const panel = el('div', 'details-panel' + (expandedIds.has(task.taskId) ? ' open' : ''));
-    if (expandedIds.has(task.taskId)) toggle.classList.add('open');
+    const panel = el('div', 'details-panel' + (expanded ? ' open' : ''));
+    if (expanded) toggle.classList.add('open');
     const clip = el('div', 'details-clip');
     clip.appendChild(buildDetailsList(task, { ctx, impact, reasons, movedTexts }));
     panel.appendChild(clip);
@@ -836,15 +837,11 @@ function renderCard(task) {
     approve.addEventListener('contextmenu', (e) => e.preventDefault());
   }
 
-  const inspect = el('button', 'btn primary', 'Inspect');
-  inspect.type = 'button';
-  inspect.addEventListener('click', () => openInspect(task));
-
   const snz = el('button', 'btn dim', '後で');
   snz.type = 'button';
   snz.addEventListener('click', () => snooze(task));
 
-  actions.append(reject, inspect, snz);
+  actions.append(reject, snz, approve);
   card.appendChild(actions);
   return card;
 }
@@ -854,26 +851,41 @@ function renderCard(task) {
  * restricted to http(s) so a payload can never become javascript:. */
 function buildDetailsList(task, { ctx, impact, reasons, movedTexts = [] }) {
   const list = el('div', 'details-list');
-  const row = (label, node) => {
-    const r = el('div', 'drow');
-    r.appendChild(el('div', 'drow-label', label));
-    r.appendChild(node);
+
+  // horizontal row: icon + label left, value right (short values)
+  const rowH = (icon, label, valueNode) => {
+    const r = el('div', 'drow drow-h');
+    r.appendChild(el('span', `drow-ic dvv-ic dvv-ic-${icon}`));
+    r.appendChild(el('span', 'drow-label', label));
+    const v = el('span', 'drow-value');
+    v.appendChild(valueNode);
+    r.appendChild(v);
     list.appendChild(r);
+    return r;
+  };
+  // stacked row: icon + label on one line, value below (long values)
+  const rowW = (icon, label, valueNode) => {
+    const r = el('div', 'drow');
+    const head = el('div', 'drow-head');
+    head.appendChild(el('span', `drow-ic dvv-ic dvv-ic-${icon}`));
+    head.appendChild(el('span', 'drow-label', label));
+    r.appendChild(head);
+    r.appendChild(valueNode);
+    list.appendChild(r);
+    return r;
   };
   const safeHref = (url) =>
     typeof url === 'string' && /^https?:\/\//i.test(url) ? url : null;
 
-  // the result statement lives at the top of 裏面 (P3: 結果を先に — but the
-  // front now carries only the diff, so restate it here in full)
+  // 結果 — the decision statement, always first
   if (impact && typeof impact.summary === 'string' && impact.summary) {
     const v = el('div', 'drow-value', `承認すると ${impact.summary}`);
     if (impact.reversible === false) {
-      v.appendChild(el('div', 'sub', 'この操作は取り消せません'));
+      v.appendChild(el('div', 'sub warn', 'この操作は取り消せません'));
     }
-    row('結果', v);
+    rowW('bolt', '結果', v);
   }
-  // なぜ: caption texts moved off the front + context.reasoning merge
-  // into ONE row (they are the same kind of information)
+  // なぜ — caption texts (moved off the front) + context.reasoning
   const narrative = movedTexts.filter(
     (comp) => comp.component === 'Text' && comp.properties?.source !== 'external',
   );
@@ -885,27 +897,26 @@ function buildDetailsList(task, { ctx, impact, reasons, movedTexts = [] }) {
     for (const comp of narrative) {
       v.appendChild(el('div', '', String(comp.properties?.text ?? '')));
     }
-    if (ctx && ctx.reasoning) {
-      v.appendChild(el('div', '', ctx.reasoning));
-    }
-    row('なぜ', v);
+    if (ctx && ctx.reasoning) v.appendChild(el('div', '', ctx.reasoning));
+    rowW('bulb', 'なぜ', v);
   }
   for (const comp of quotes) {
-    const node = renderComponent(comp, task).firstChild;
-    row('引用', node);
+    rowW('mail', '引用', renderComponent(comp, task).firstChild);
   }
   if (ctx && ctx.requester && ctx.requester.name) {
-    const v = el('div', 'drow-value', ctx.requester.name);
+    const v = el('div', 'drow-value');
+    v.appendChild(el('span', '', ctx.requester.name));
     if (ctx.requester.onBehalfOf) {
-      v.appendChild(el('div', 'sub', `${ctx.requester.onBehalfOf} の依頼`));
+      v.appendChild(el('span', 'sub', ` · ${ctx.requester.onBehalfOf} の依頼`));
     }
-    row('誰が', v);
+    rowH('person', '誰が', v);
   }
   if (ctx && Array.isArray(ctx.participants) && ctx.participants.length) {
     const wrap = el('div', 'drow-value');
     wrap.style.display = 'flex';
     wrap.style.flexWrap = 'wrap';
     wrap.style.gap = '6px';
+    wrap.style.justifyContent = 'flex-end';
     for (const p of ctx.participants) {
       const chip = el('span', 'dpart');
       const status = (p.status || '').toLowerCase();
@@ -914,7 +925,7 @@ function buildDetailsList(task, { ctx, impact, reasons, movedTexts = [] }) {
       if (p.status) chip.appendChild(el('span', 'sub', p.status));
       wrap.appendChild(chip);
     }
-    row('参加者', wrap);
+    rowH('group', '参加者', wrap);
   }
   if (ctx && ctx.source && ctx.source.label) {
     const href = safeHref(ctx.source.url);
@@ -928,19 +939,20 @@ function buildDetailsList(task, { ctx, impact, reasons, movedTexts = [] }) {
     } else {
       v.appendChild(el('span', '', ctx.source.label));
     }
-    row('出典', v);
+    rowH('link', '出典', v);
   }
   if (impact && impact.cost && typeof impact.cost === 'object' &&
       typeof impact.cost.amount === 'number' && impact.cost.currency) {
-    row('金額', el('div', 'drow-value', `${impact.cost.currency} ${impact.cost.amount.toLocaleString('en-US')}`));
+    rowH('payments', '金額', el('span', '', `${impact.cost.currency} ${impact.cost.amount.toLocaleString('en-US')}`));
   }
   if (reasons.length > 0) {
     const wrap = el('div', 'drow-value');
     wrap.style.display = 'flex';
     wrap.style.flexWrap = 'wrap';
     wrap.style.gap = '6px';
+    wrap.style.justifyContent = 'flex-end';
     for (const r of reasons) wrap.appendChild(el('span', 'dtag', r));
-    row('注意点', wrap);
+    rowH('warning', '注意点', wrap);
   }
   if (typeof task.expiresAt === 'string' && task.expiresAt) {
     const at = new Date(task.expiresAt);
@@ -948,7 +960,17 @@ function buildDetailsList(task, { ctx, impact, reasons, movedTexts = [] }) {
       ? task.expiresAt
       : at.toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     const verb = { approve: '自動承認', reject: '自動却下', escalate: '緊急化' }[task.onExpire] || '自動破棄';
-    row('期限', el('div', 'drow-value', `${when} — ${verb}`));
+    rowH('schedule', '期限', el('span', '', `${when} — ${verb}`));
+  }
+
+  // form editing lives behind one clear affordance at the panel bottom
+  const form = task.actions && Array.isArray(task.actions.inspectForm)
+    ? task.actions.inspectForm : [];
+  if (form.length > 0) {
+    const edit = el('button', 'btn primary details-edit', '✎ 修正して承認');
+    edit.type = 'button';
+    edit.addEventListener('click', () => openInspect(task));
+    list.appendChild(edit);
   }
   return list;
 }
