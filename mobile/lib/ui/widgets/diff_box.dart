@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 
+import '../colors.dart';
+
 /// DiffBox catalog component — before/after with red/green highlight,
-/// graspable in 0.5s (spec §3.2). `properties`: title, before, after,
-/// highlight (info | warning | critical), optional `rows` (list of
-/// `{label?, before?, after?}` rendered after the main pair), optional
-/// `inline` (unified-diff style text with `+`/`-`/space prefixes — plain
-/// text lines, colored, never markup). Everything renders as text (NFR-2.1).
+/// graspable in 0.5s (spec §3.2). Renders as a white pill on the colored
+/// card. `properties`: title, before, after, highlight (info | warning |
+/// critical), optional `rows` (list of `{label?, before?, after?}`),
+/// optional `inline` (unified-diff text with `+`/`-`/space prefixes).
+/// Everything renders as text (NFR-2.1).
 class DiffBox extends StatelessWidget {
   final Map<String, dynamic> properties;
 
@@ -14,9 +16,9 @@ class DiffBox extends StatelessWidget {
   Color get _highlightColor {
     switch (properties['highlight']) {
       case 'critical':
-        return const Color(0xFFFF5C5C);
+        return const Color(0xFFE0352B);
       case 'warning':
-        return const Color(0xFFFFB020);
+        return const Color(0xFFF0A726);
       default:
         return const Color(0xFF5B8DEF);
     }
@@ -51,9 +53,9 @@ class DiffBox extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.04),
-        borderRadius: BorderRadius.circular(12),
-        border: Border(left: BorderSide(color: _highlightColor, width: 3)),
+        color: PopColors.pill,
+        borderRadius: BorderRadius.circular(16),
+        border: Border(left: BorderSide(color: _highlightColor, width: 4)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -64,7 +66,7 @@ class DiffBox extends StatelessWidget {
               style: Theme.of(context)
                   .textTheme
                   .labelMedium
-                  ?.copyWith(color: Colors.white70),
+                  ?.copyWith(color: const Color(0xFF565B4D)),
             ),
           if (title != null && title.isNotEmpty) const SizedBox(height: 6),
           _Pair(before: before, after: after),
@@ -106,7 +108,7 @@ class _Pair extends StatelessWidget {
               style: Theme.of(context)
                   .textTheme
                   .labelSmall
-                  ?.copyWith(color: Colors.white70),
+                  ?.copyWith(color: const Color(0xFF565B4D)),
             ),
           ),
         Row(
@@ -115,16 +117,17 @@ class _Pair extends StatelessWidget {
               child: _Side(
                   label: 'BEFORE',
                   text: before,
-                  color: const Color(0xFFFF7A7A)),
+                  color: PopColors.diffBefore),
             ),
             const SizedBox(width: 8),
-            const Icon(Icons.arrow_forward, size: 16, color: Colors.white38),
+            const Icon(Icons.arrow_forward,
+                size: 16, color: Color(0x5A1B1E16)),
             const SizedBox(width: 8),
             Expanded(
               child: _Side(
                   label: 'AFTER',
                   text: after,
-                  color: const Color(0xFF7BE494)),
+                  color: PopColors.diffAfter),
             ),
           ],
         ),
@@ -146,8 +149,8 @@ class _Inline extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.3),
-        borderRadius: BorderRadius.circular(8),
+        color: const Color(0xFF14170F),
+        borderRadius: BorderRadius.circular(10),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -161,10 +164,10 @@ class _Inline extends StatelessWidget {
                 fontSize: 12,
                 height: 1.5,
                 color: line.startsWith('+')
-                    ? const Color(0xFF7BE494)
+                    ? const Color(0xFF3DDC84)
                     : line.startsWith('-')
-                        ? const Color(0xFFFF7A7A)
-                        : Colors.white54,
+                        ? const Color(0xFFFF6B6B)
+                        : const Color(0xFF8A9080),
               ),
             ),
         ],

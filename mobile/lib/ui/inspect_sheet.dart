@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import 'colors.dart';
 import 'package:genui/genui.dart' show Surface;
 
 import '../models/task_card.dart';
@@ -18,7 +20,7 @@ Future<void> showInspectSheet(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
-    backgroundColor: const Color(0xFF171B24),
+    backgroundColor: PopColors.chrome,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
     ),
@@ -99,7 +101,7 @@ class _InspectSheetState extends State<_InspectSheet> {
               width: 40,
               height: 4,
               decoration: BoxDecoration(
-                color: Colors.white24,
+                color: Colors.white.withValues(alpha: 0.18),
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
@@ -347,8 +349,8 @@ class _FormTile extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.white12),
-          color: Colors.white.withValues(alpha: 0.03),
+          border: Border.all(color: PopColors.borderColor),
+          color: PopColors.chrome2,
         ),
         child: Row(
           children: [

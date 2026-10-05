@@ -3,11 +3,15 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import '../../models/task_card.dart';
+import '../colors.dart';
 import 'diff_box.dart';
 
 /// Maps protocol components to native widgets (FR-1.2). Unknown types
 /// fall back to a generic text card — never a crash (FR-1.3). Payloads
 /// are pure data rendered as text; nothing is ever evaluated (NFR-2.1).
+///
+/// Components render in ink on the colored card; content-bearing blocks
+/// (external quotes) become white pills like on the web.
 class ComponentRenderer extends StatelessWidget {
   final CardComponent component;
 
@@ -42,23 +46,38 @@ class ComponentRenderer extends StatelessWidget {
     final text = '${component.properties['text'] ?? ''}';
     final variant = component.properties['variant'] as String?;
     final style = switch (variant) {
-      'title' => Theme.of(context).textTheme.titleMedium,
-      'caption' =>
-        Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white60),
-      _ => Theme.of(context).textTheme.bodyMedium,
+      'title' => Theme.of(context).textTheme.titleMedium
+          ?.copyWith(color: PopColors.ink, fontWeight: FontWeight.w800),
+      'caption' => Theme.of(context).textTheme.bodySmall
+          ?.copyWith(color: PopColors.inkSoft),
+      _ => Theme.of(context)
+          .textTheme
+          .bodyMedium
+          ?.copyWith(color: PopColors.ink),
     };
     // External-origin text (mail bodies, PR comments) renders in the
-    // quote-block style so it cannot impersonate system UI (NFR-2.2).
+    // white pill quote-block style so it cannot impersonate system UI
+    // (NFR-2.2).
     if (component.properties['source'] == 'external') {
       return Container(
-        padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
+        padding: const EdgeInsets.fromLTRB(11, 8, 11, 8),
         decoration: BoxDecoration(
-          border: const Border(left: BorderSide(color: Colors.white24, width: 3)),
-          color: Colors.white.withValues(alpha: 0.03),
+          border: Border(
+            left: BorderSide(
+                color: PopColors.ink.withValues(alpha: 0.35), width: 3),
+          ),
+          color: PopColors.pill,
+          borderRadius: const BorderRadius.horizontal(
+            left: Radius.circular(6),
+            right: Radius.circular(12),
+          ),
         ),
         child: Text(
           text,
-          style: style?.copyWith(fontStyle: FontStyle.italic),
+          style: style?.copyWith(
+            fontStyle: FontStyle.italic,
+            color: const Color(0xFF4A4E42),
+          ),
         ),
       );
     }
@@ -76,8 +95,15 @@ class ComponentRenderer extends StatelessWidget {
             ActionChip(
               label: Text(
                 '${option['label'] ?? 'option'}',
-                style: const TextStyle(fontSize: 12),
+                style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white),
               ),
+              backgroundColor: PopColors.darkPill,
+              side: BorderSide.none,
+              shape: const StadiumBorder(),
+              visualDensity: VisualDensity.compact,
               onPressed: () =>
                   _onChip(Map<String, dynamic>.from(option)),
             ),
@@ -104,9 +130,11 @@ class ComponentRenderer extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.orange.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.orange.withValues(alpha: 0.4)),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: PopColors.ink.withValues(alpha: 0.3),
+          width: 1.5,
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -114,17 +142,17 @@ class ComponentRenderer extends StatelessWidget {
           const Text(
             'Unsupported component',
             style: TextStyle(
-              fontWeight: FontWeight.w700,
+              fontWeight: FontWeight.w800,
               fontSize: 12,
-              color: Colors.orangeAccent,
+              color: PopColors.inkSoft,
             ),
           ),
           Text(
             component.component,
             style: const TextStyle(
               fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: Colors.orangeAccent,
+              fontWeight: FontWeight.w700,
+              color: PopColors.ink,
             ),
           ),
           const SizedBox(height: 4),
@@ -132,7 +160,7 @@ class ComponentRenderer extends StatelessWidget {
             pretty,
             style: const TextStyle(
               fontSize: 11,
-              color: Colors.white54,
+              color: PopColors.inkSoft,
               fontFamily: 'monospace',
             ),
           ),

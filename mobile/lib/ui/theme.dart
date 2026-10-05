@@ -1,15 +1,18 @@
 import 'package:flutter/material.dart';
 
-/// Dark, calm triage theme — cards carry the color, chrome stays quiet.
+import 'colors.dart';
+
+/// Color-pop triage theme — warm dark chrome, amber CTA. The cards
+/// themselves carry severity color (see PopColors / task_card_view).
 final ThemeData triageTheme = ThemeData(
   useMaterial3: true,
   brightness: Brightness.dark,
   colorScheme: ColorScheme.fromSeed(
-    seedColor: const Color(0xFF5B8DEF),
+    seedColor: PopColors.amber,
     brightness: Brightness.dark,
-    surface: const Color(0xFF171B22),
+    surface: PopColors.chrome,
   ),
-  scaffoldBackgroundColor: const Color(0xFF101318),
+  scaffoldBackgroundColor: PopColors.bg,
   appBarTheme: const AppBarTheme(
     backgroundColor: Colors.transparent,
     centerTitle: false,
@@ -17,6 +20,6 @@ final ThemeData triageTheme = ThemeData(
   ),
   snackBarTheme: const SnackBarThemeData(
     behavior: SnackBarBehavior.floating,
-    backgroundColor: Color(0xFF232936),
+    backgroundColor: PopColors.chrome2,
   ),
 );

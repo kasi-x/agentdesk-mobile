@@ -492,7 +492,9 @@ setInterval(() => {
 }, 5000);
 
 function renderCard(task) {
-  const card = el('div', 'card');
+  const sev = task.severity === 'critical' ? 'critical' : task.severity === 'warning' ? 'warning' : 'info';
+  // The card surface itself carries severity (color-pop theme).
+  const card = el('div', `card sev-${sev}`);
   const inner = el('div', 'card-inner');
 
   // Expiry countdown strip (I-203): the hub executes the default
@@ -523,7 +525,6 @@ function renderCard(task) {
   agentCol.appendChild(el('div', 'agent-name', agent.name || 'Agent'));
   agentCol.appendChild(el('div', 'card-meta', timeAgo(task.createdAt)));
   header.appendChild(agentCol);
-  const sev = task.severity === 'critical' ? 'critical' : task.severity === 'warning' ? 'warning' : 'info';
   header.appendChild(el('span', `badge ${sev}`, sev));
   inner.appendChild(header);
   // Impact row: 「承認すると…」+ reversibility / cost badges (I-202).

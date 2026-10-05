@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 
-/// Confidence ≥0.9 → green ("swipe right without reading"), <0.6 → red.
-/// Low confidence additionally shows the reason tags (spec §3.2).
+import '../colors.dart';
+
+/// Confidence indicator on the colored card: ink label + ink fill over a
+/// translucent dark track. The percentage and the low-confidence reason
+/// tags carry the level (color itself is reserved for severity).
 class ConfidenceIndicator extends StatelessWidget {
   final double confidence;
   final List<String> reasons;
@@ -11,20 +14,6 @@ class ConfidenceIndicator extends StatelessWidget {
     required this.confidence,
     this.reasons = const <String>[],
   });
-
-  Color get _color {
-    if (confidence >= 0.9) return const Color(0xFF7BE494);
-    if (confidence >= 0.75) return const Color(0xFFB7E36B);
-    if (confidence >= 0.6) return const Color(0xFFFFB020);
-    return const Color(0xFFFF5C5C);
-  }
-
-  String get _label {
-    if (confidence >= 0.9) return '無思考で右スワイプ可';
-    if (confidence >= 0.75) return '確認推奨';
-    if (confidence >= 0.6) return '要確認';
-    return '要注意';
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -36,7 +25,12 @@ class ConfidenceIndicator extends StatelessWidget {
           children: [
             const Text(
               'Confidence',
-              style: TextStyle(fontSize: 10, color: Colors.white38, letterSpacing: 1),
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+                color: PopColors.inkSoft,
+                letterSpacing: 1,
+              ),
             ),
             const SizedBox(width: 6),
             Expanded(
@@ -44,36 +38,20 @@ class ConfidenceIndicator extends StatelessWidget {
                 borderRadius: BorderRadius.circular(3),
                 child: LinearProgressIndicator(
                   value: confidence.clamp(0.0, 1.0),
-                  minHeight: 4,
-                  backgroundColor: Colors.white12,
-                  valueColor: AlwaysStoppedAnimation<Color>(_color),
+                  minHeight: 5,
+                  backgroundColor: const Color(0x2A0F110C),
+                  valueColor:
+                      const AlwaysStoppedAnimation<Color>(PopColors.ink),
                 ),
               ),
             ),
             const SizedBox(width: 8),
             Text(
               '$percent%',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-                color: _color,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: _color.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Text(
-                _label,
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w600,
-                  color: _color,
-                ),
-              ),
+              style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: PopColors.ink),
             ),
           ],
         ),
@@ -86,14 +64,17 @@ class ConfidenceIndicator extends StatelessWidget {
               for (final reason in reasons)
                 Container(
                   padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
                   decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.06),
+                    color: const Color(0x290F110C),
                     borderRadius: BorderRadius.circular(999),
                   ),
                   child: Text(
                     reason,
-                    style: const TextStyle(fontSize: 11, color: Colors.white70),
+                    style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: PopColors.ink),
                   ),
                 ),
             ],
