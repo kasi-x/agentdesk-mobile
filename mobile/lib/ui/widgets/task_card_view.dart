@@ -48,6 +48,12 @@ class _TaskCardViewState extends State<TaskCardView> {
       .where((c) => !_movedTexts.contains(c))
       .toList();
 
+  bool get _deadlineUrgent {
+    if (task.expiresAt == null) return false;
+    final remaining = task.expiresAt!.difference(DateTime.now());
+    return remaining.inSeconds <= 0 || remaining <= const Duration(minutes: 5);
+  }
+
   bool get _hasDetails {
     final ctx = task.context;
     final impact = task.impact;
@@ -180,52 +186,24 @@ class _TaskCardViewState extends State<TaskCardView> {
     );
   }
 
-  /// Quiet meta: 信頼度 · deadline. Urgency color only when it matters.
+  /// Meta: ONLY the urgent countdown (<=5m / past). 信頼度 is gone
+  /// (user decision); the full deadline lives in 詳細 — one place, never two.
   Widget _metaLine() {
-    if (task.confidence == 0 && task.expiresAt == null) {
-      return const SizedBox.shrink();
-    }
-    final pct = (task.confidence * 100).round();
-    final items = <Widget>[
-      Text(
-        '信頼度 $pct%',
-        style: TextStyle(
-          fontSize: 13,
-          fontFeatures: const [FontFeature.tabularFigures()],
-          color: task.confidence < 0.6 ? PopColors.orange : PopColors.text2,
-        ),
+    if (task.expiresAt == null) return const SizedBox.shrink();
+    final remaining = task.expiresAt!.difference(DateTime.now());
+    final urgent =
+        remaining.inSeconds <= 0 || remaining <= const Duration(minutes: 5);
+    if (!urgent) return const SizedBox.shrink();
+    final when = remaining.inSeconds <= 0
+        ? '期限切れ'
+        : '残り ${_formatRemaining(remaining)}';
+    return Text(
+      when,
+      style: const TextStyle(
+        fontSize: 13,
+        fontFeatures: [FontFeature.tabularFigures()],
+        color: PopColors.red,
       ),
-    ];
-    // deadline surfaces on the front only when it is close; the full
-    // deadline lives in 詳細 (P8: the front carries the decision).
-    if (task.expiresAt != null) {
-      final remaining = task.expiresAt!.difference(DateTime.now());
-      final urgent =
-          remaining.inSeconds <= 0 || remaining <= const Duration(minutes: 5);
-      final soon = !urgent && remaining <= const Duration(minutes: 30);
-      if (urgent || soon) {
-        final when = remaining.inSeconds <= 0
-            ? '期限切れ'
-            : '残り ${_formatRemaining(remaining)}';
-        items.add(
-          Text(
-            when,
-            style: TextStyle(
-              fontSize: 13,
-              fontFeatures: const [FontFeature.tabularFigures()],
-              color: urgent ? PopColors.red : PopColors.orange,
-            ),
-          ),
-        );
-      }
-    }
-    return Row(
-      children: [
-        for (var i = 0; i < items.length; i++) ...[
-          if (i > 0) const SizedBox(width: 14),
-          items[i],
-        ],
-      ],
     );
   }
 
@@ -289,6 +267,7 @@ class _TaskCardViewState extends State<TaskCardView> {
                           task: task,
                           movedTexts: _movedTexts,
                           onInspect: widget.onInspect,
+                          deadlineUrgent: _deadlineUrgent,
                         ),
                   )
                 : const SizedBox(width: double.infinity),
@@ -368,11 +347,13 @@ class _DetailsPanel extends StatelessWidget {
   final TaskCard task;
   final List<CardComponent> movedTexts;
   final VoidCallback? onInspect;
+  final bool deadlineUrgent;
 
   const _DetailsPanel({
     required this.task,
     this.movedTexts = const [],
     this.onInspect,
+    this.deadlineUrgent = false,
   });
 
   @override
@@ -519,7 +500,9 @@ class _DetailsPanel extends StatelessWidget {
                   ),
               ],
             )),
-          if (task.expiresAt != null)
+          // 期限: shown here ONLY while the front shows no urgent
+          // countdown — the deadline lives in exactly one place.
+          if (task.expiresAt != null && !deadlineUrgent)
             _rowInline(Icons.schedule, '期限', Text(
                 '${_formatDeadline(task.expiresAt!)} — ${_verb(task.onExpire)}',
                 style: const TextStyle(

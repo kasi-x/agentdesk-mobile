@@ -762,47 +762,6 @@ body {
   animation: slot-move 0.8s var(--spring) 0.18s backwards;
 }
 
-.dvv-tl-ticks {
-  position: relative;
-  height: 13px;
-  margin-top: 3px;
-}
-
-.dvv-tl-tick {
-  position: absolute;
-  top: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  transform: translateX(-50%);
-}
-
-.dvv-tl-tickline {
-  width: 1px;
-  height: 3px;
-  background: rgba(255, 255, 255, 0.16);
-}
-
-.dvv-tl-tick.ghost .dvv-tl-tickline {
-  background: rgba(235, 235, 245, 0.3);
-}
-
-.dvv-tl-tick.slot .dvv-tl-tickline {
-  background: rgba(255, 255, 255, 0.55);
-}
-
-.dvv-tl-ticklabel {
-  font-size: 9px;
-  font-weight: 500;
-  color: var(--text-3);
-  font-variant-numeric: tabular-nums;
-}
-
-.dvv-tl-tick.slot .dvv-tl-ticklabel {
-  color: var(--text);
-  font-weight: 700;
-}
-
 .diffbox-inline {
   margin: 0 13px 13px;
   padding: 9px 12px;

@@ -420,47 +420,6 @@ class _DayTimeline extends StatelessWidget {
               ],
             ),
           ),
-          // boundary ticks: both edges of both slots
-          SizedBox(
-            height: 18,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                for (final (m, kind) in [
-                  (b, 'ghost'),
-                  (b + durationMin, 'ghost'),
-                  (a, 'slot'),
-                  (a + durationMin, 'slot'),
-                ])
-                  Align(
-                    alignment: Alignment(frac(m) * 2 - 1, 0),
-                    child: Column(
-                      children: [
-                        Container(
-                          width: 1,
-                          height: 3,
-                          color: kind == 'slot'
-                              ? const Color(0x8CEBEBF5)
-                              : const Color(0x4DEBEBF5),
-                        ),
-                        Text(
-                          fmt(m),
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight:
-                                kind == 'slot' ? FontWeight.w700 : FontWeight.w500,
-                            color: kind == 'slot'
-                                ? PopColors.text
-                                : PopColors.text3,
-                            fontFeatures: const [FontFeature.tabularFigures()],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-              ],
-            ),
-          ),
         ],
       ),
     );

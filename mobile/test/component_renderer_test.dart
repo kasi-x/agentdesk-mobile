@@ -50,7 +50,7 @@ void main() {
     // day timeline: ghost slot + slid-in slot, both boundaries ticked
     expect(find.textContaining('14:00 – 15:00'), findsOneWidget);
     expect(find.textContaining('16:30 – 17:30'), findsOneWidget);
-    expect(find.text('14:00'), findsNWidgets(2)); // chip + timeline tick
+    expect(find.text('14:00'), findsOneWidget); // chip (ticks removed)
     expect(find.text('対象'), findsOneWidget);
     expect(find.text('UserA'), findsOneWidget);
     expect(find.text('→ UserB'), findsOneWidget);
