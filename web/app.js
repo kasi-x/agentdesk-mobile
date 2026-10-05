@@ -572,7 +572,7 @@ function renderCard(task) {
   const right = task.actions && task.actions.onSwipeRight;
   const left = task.actions && task.actions.onSwipeLeft;
 
-  const approve = el('button', 'btn ok', `✓ ${(right && right.label) || 'Approve'}`);
+  const approve = el('button', 'btn ok', `${(right && right.label) || 'Approve'}`);
   approve.type = 'button';
   approve.addEventListener('click', () =>
     triage(task, { actionName: (right && right.actionName) || 'approve', data: right && right.payload, source: 'web_ui' }),
@@ -592,7 +592,7 @@ function renderCard(task) {
       source: 'web_ui',
     });
   };
-  const reject = el('button', 'btn no', `✕ ${(left && left.label) || 'Reject'}`);
+  const reject = el('button', 'btn no', `${(left && left.label) || 'Reject'}`);
   reject.type = 'button';
   if (rejectReasons.length) {
     reject.addEventListener('click', () => {
@@ -620,7 +620,7 @@ function renderCard(task) {
   // Locked (critical + irreversible): approve becomes a hold-to-confirm
   // ring (I-102/I-103). Pointer press fills it; early release cancels.
   if (riskLevel(task) === 'locked') {
-    approve.textContent = `🔒 ${(right && right.label) || '長押しで承認'}`;
+    approve.textContent = `${(right && right.label) || '長押しで承認'}`;
     approve.classList.add('hold');
     let holdTimer = null;
     let progress = null;
@@ -712,6 +712,7 @@ function render() {
 function openInspect(task) {
   state.inspectTask = task;
   renderInspect();
+  document.getElementById('sheet-backdrop').hidden = false;
 }
 
 function closeInspect() {
@@ -719,6 +720,7 @@ function closeInspect() {
   const sheet = document.getElementById('inspect-sheet');
   sheet.hidden = true;
   clear(sheet);
+  document.getElementById('sheet-backdrop').hidden = true;
 }
 
 function renderInspect() {
@@ -768,10 +770,14 @@ function renderInspect() {
         input.type = 'range';
         input.min = p.min ?? 0;
         input.max = p.max ?? 100;
-        if (p.divisions > 1) input.step = (Number(input.max) - Number(input.min)) / (p.divisions - 1);
+        if (p.divisions > 1) {
+          const raw = (Number(input.max) - Number(input.min)) / (p.divisions - 1);
+          input.step = Math.round(raw * 1e6) / 1e6; // avoid float noise in the UI
+        }
         input.value = p.default ?? input.min;
-        const val = el('span', 'range-value', input.value);
-        input.addEventListener('input', () => { val.textContent = input.value; });
+        const fmt = (v) => String(parseFloat(Number(v).toPrecision(10)));
+        const val = el('span', 'range-value', fmt(input.value));
+        input.addEventListener('input', () => { val.textContent = fmt(input.value); });
         row.append(input, val);
         field.appendChild(row);
         inputs.set(comp.id, () => Number(input.value));
@@ -913,5 +919,6 @@ async function bootstrap() {
   connect();
 }
 
+document.getElementById('sheet-backdrop').addEventListener('click', closeInspect);
 wireSettings();
 bootstrap();

@@ -3,17 +3,37 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0a0d13" />
   <title>AgentDesk Triage</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+    rel="stylesheet"
+  />
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
   <header id="topbar">
     <div class="brand">
+      <span class="brand-glyph" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="5" y="14" width="14" height="7" rx="2" />
+          <rect x="3" y="8.5" width="18" height="5.5" rx="2" opacity="0.65" />
+          <rect x="7" y="3" width="10" height="5.5" rx="2" opacity="0.35" />
+        </svg>
+      </span>
       <span class="brand-name">AgentDesk</span>
       <span id="status-dot" class="dot" title="接続状態"></span>
     </div>
     <span id="pending-count" class="count" hidden></span>
-    <button id="settings-toggle" class="btn ghost sm" type="button">⚙ 設定</button>
+    <button id="settings-toggle" class="btn ghost sm" type="button">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+        <circle cx="12" cy="12" r="3" />
+      </svg>
+      設定
+    </button>
   </header>
 
   <section id="settings" class="settings" hidden>
@@ -32,6 +52,14 @@
 
   <main id="stack"></main>
 
+  <footer class="kbd-hints" aria-hidden="true">
+    <span><kbd>→</kbd>承認</span>
+    <span><kbd>←</kbd>却下</span>
+    <span><kbd>i</kbd>詳細</span>
+    <span><kbd>s</kbd>後で</span>
+  </footer>
+
+  <div id="sheet-backdrop" class="sheet-backdrop" hidden></div>
   <div id="inspect-sheet" class="sheet" hidden></div>
   <div id="toasts" class="toasts"></div>
 
