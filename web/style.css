@@ -469,6 +469,24 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.details-chev {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  background-color: var(--text-3);
+  transition: transform 0.28s var(--spring);
+  -webkit-mask: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.details-chev.open {
+  transform: rotate(180deg);
+}
+
+.card {
+  cursor: pointer;
+}
+
 .summary {
   font-size: 16px;
   font-weight: 600;
@@ -710,6 +728,47 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* word-only legend: no numbers on the timeline */
+.dvv-tl-legend {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.dvv-tl-lg {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: var(--text-2);
+}
+
+.dvv-tl-lg::before {
+  content: "";
+  width: 14px;
+  height: 8px;
+  border-radius: 3px;
+}
+
+.dvv-tl-lg.ghost::before {
+  border: 1.5px dashed rgba(235, 235, 245, 0.42);
+  background: repeating-linear-gradient(
+    135deg,
+    rgba(120, 120, 128, 0.1) 0 4px,
+    transparent 4px 8px
+  );
+}
+
+.dvv-tl-lg.slot::before {
+  background: #fff;
+}
+
+.dvv-tl-lg.other::before {
+  background: var(--fill-2);
+}
+
 /* day timeline — the SLOT MOVES: ghost (before) + slid-in white slot.
  * Both boundaries of both slots are ticked: changing the time moves the
  * start AND the end. */
@@ -746,6 +805,22 @@ body {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   overflow: hidden;
+}
+
+.dvv-tl-bar.other {
+  background: var(--fill-2);
+  border-radius: 9px;
+  overflow: hidden;
+}
+
+.dvv-tl-bar-label {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0 6px;
 }
 
 .dvv-tl-bar.ghost {

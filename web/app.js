@@ -520,41 +520,72 @@ function valueChip(v, isBefore) {
   return chip;
 }
 
-/* その日の予定表で「枠がどこへ移動したか」を空間的に描く:
- * 開始も終了も変わるので、ゴースト枠(変更前 [b, b+dur])と、そこから
- * スライドしてくる白い枠(変更後 [a, a+dur])を重ね、 displacement を
- * 開始・終了の両境界を目盛りに示す。すべて表示計算のみ。 */
-function dayTimeline(bv, av, durationMin) {
+/* その日の予定表を「ブロックの関係」で描く:
+ * - グレーのブロック = 他の予定(others)
+ * - 破線の抜け枠 = 変更前のスロット
+ * - 白い枠 = 移動後のスロット(ゴースト位置からスライドして着地)
+ * 数字は書かない — 前後関係は横軸上の位置が伝える。正確な数値は
+ * 詳細パネルの「時刻」行が唯一の情報源。すべて表示計算のみ。 */
+function dayTimeline(bv, av, durationMin, others) {
   const dur = Number.isFinite(durationMin) && durationMin > 0 ? durationMin : 60;
   const b = minutesOf(bv.time);
   const a = minutesOf(av.time);
-  let start = Math.max(0, Math.floor(Math.min(b, a) / 60) * 60);
-  let end = Math.min(24 * 60, Math.ceil((Math.max(b, a) + dur) / 60) * 60);
+  const list = (Array.isArray(others) ? others : [])
+    .map((o) => {
+      if (!o || typeof o !== 'object') return null;
+      const st = typeof o.start === 'string' ? parseValue(o.start) : null;
+      const en = typeof o.end === 'string' ? parseValue(o.end) : null;
+      if (!st || !en || st.kind !== 'time' || en.kind !== 'time') return null;
+      const s0 = minutesOf(st.time);
+      const e0 = minutesOf(en.time);
+      if (e0 <= s0) return null;
+      return { s: s0, e: e0, label: typeof o.label === 'string' ? o.label : '' };
+    })
+    .filter(Boolean);
+
+  let lo = Math.min(b, a);
+  let hi = Math.max(b, a) + dur;
+  for (const o of list) {
+    if (o.s < lo - 240 || o.e > hi + 240) continue; // 遠い予定はノイズ
+    lo = Math.min(lo, o.s);
+    hi = Math.max(hi, o.e);
+  }
+  let start = Math.max(0, Math.floor(lo / 60) * 60);
+  let end = Math.min(24 * 60, Math.ceil(hi / 60) * 60);
   if (end - start < 120) start = Math.max(0, end - 120);
   const span = end - start;
   const pos = (m) => ((m - start) / span) * 100;
-  const fmt = (m) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
-  const slotLabel = (m) => `${fmt(m)} – ${fmt(m + dur)}`;
+  const spanPct = (s0, e0) => ({ left: `${pos(s0)}%`, width: `${((e0 - s0) / span) * 100}%` });
 
   const track = el('div', 'dvv-tl');
-
-  // bars: ghost (before) + the slot that slid into place (after).
-  // The delta chip already rides the chips row above — no bracket lane.
   const bars = el('div', 'dvv-tl-bars');
-  const ghost = el('div', 'dvv-tl-bar ghost', slotLabel(b));
-  ghost.style.left = `${pos(b)}%`;
-  ghost.style.width = `${(dur / span) * 100}%`;
-  const slot = el('div', 'dvv-tl-bar slot', slotLabel(a));
-  slot.style.left = `${pos(a)}%`;
-  slot.style.width = `${(dur / span) * 100}%`;
-  // 空間の移動: the block starts where the ghost is and slides to its
-  // new position (shift in element-widths; sign handles either direction)
+
+  for (const o of list) {
+    const blk = el('div', 'dvv-tl-bar other');
+    const pp = spanPct(o.s, o.e);
+    blk.style.left = pp.left;
+    blk.style.width = pp.width;
+    if (o.label) blk.appendChild(el('span', 'dvv-tl-bar-label', o.label));
+    bars.appendChild(blk);
+  }
+
+  const ghost = el('div', 'dvv-tl-bar ghost');
+  const gp = spanPct(b, b + dur);
+  ghost.style.left = gp.left;
+  ghost.style.width = gp.width;
+  const slot = el('div', 'dvv-tl-bar slot');
+  const sp = spanPct(a, a + dur);
+  slot.style.left = sp.left;
+  slot.style.width = sp.width;
   slot.style.setProperty('--shift', `${((b - a) / dur) * 100}%`);
   bars.append(ghost, slot);
   track.appendChild(bars);
 
-  // No tick row: both boundary times already ride the slot labels above —
-  // information is shown once, not three times.
+  const legend = el('div', 'dvv-tl-legend');
+  legend.appendChild(el('span', 'dvv-tl-lg ghost', '変更前'));
+  legend.appendChild(el('span', 'dvv-tl-lg slot', '変更後'));
+  if (list.length > 0) legend.appendChild(el('span', 'dvv-tl-lg other', '他の予定'));
+  track.appendChild(legend);
   return track;
 }
 
@@ -564,21 +595,22 @@ function renderValuePair(parent, label, beforeRaw, afterRaw, opts = {}) {
   const bv = parseValue(beforeRaw);
   const av = parseValue(afterRaw);
   if (bv && av && bv.kind === av.kind) {
-    const chips = el('div', 'dvv-chips');
     if (bv.kind === 'datetime') {
-      const dateChip = el('span', 'dvv-date');
-      dateChip.appendChild(diffIcon('calendar'));
-      dateChip.appendChild(el('span', 'dvv-date-text', bv.date));
-      chips.appendChild(dateChip);
-    }
-    chips.appendChild(valueChip(bv, true));
-    chips.appendChild(diffIcon('arrow-right', 'dvv-arrow'));
-    chips.appendChild(valueChip(av, false));
-    const delta = deltaLabel(bv, av);
-    if (delta) chips.appendChild(el('span', 'dvv-delta', delta));
-    row.appendChild(chips);
-    if (bv.kind === 'datetime' && bv.dateKey === av.dateKey) {
-      row.appendChild(dayTimeline(bv, av, opts.durationMin));
+      // 数字を並べない: 日付の一行とブロックのタイムラインだけ。
+      // 正確な時刻は詳細パネルの「時刻」行が唯一の情報源。
+      const dateLine = el('div', 'dvv-date');
+      dateLine.appendChild(diffIcon('calendar'));
+      dateLine.appendChild(el('span', 'dvv-date-text', bv.date));
+      row.appendChild(dateLine);
+      row.appendChild(dayTimeline(bv, av, opts.durationMin, opts.others));
+    } else {
+      const chips = el('div', 'dvv-chips');
+      chips.appendChild(valueChip(bv, true));
+      chips.appendChild(diffIcon('arrow-right', 'dvv-arrow'));
+      chips.appendChild(valueChip(av, false));
+      const delta = deltaLabel(bv, av);
+      if (delta) chips.appendChild(el('span', 'dvv-delta', delta));
+      row.appendChild(chips);
     }
   } else {
     row.appendChild(el('div', 'diff-before', beforeRaw || ''));
@@ -606,7 +638,7 @@ function renderComponent(comp, task) {
       if (p.title && typeof p.title === 'string') {
         wrap.appendChild(el('div', 'diffbox-title', p.title));
       }
-      const pairOpts = { durationMin: Number(p.duration) };
+      const pairOpts = { durationMin: Number(p.duration), others: p.others };
       renderValuePair(wrap, null, p.before, p.after, pairOpts);
       if (Array.isArray(p.rows)) {
         for (const r of p.rows) {
@@ -694,10 +726,24 @@ function renderCard(task) {
   const pct = typeof task.confidence === 'number'
     ? Math.round(Math.min(1, Math.max(0, task.confidence)) * 100) : null;
 
+  // 詳細ビュワー availability (computed early: the header chevron needs it)
+  const hasContext = !!(ctx && (ctx.reasoning || ctx.requester?.name ||
+    (Array.isArray(ctx.participants) && ctx.participants.length) || ctx.source?.label));
+  let timeInfo = null;
+  for (const comp of orderedComponents(task)) {
+    if (comp.component !== 'DiffBox') continue;
+    const bv = parseValue(comp.properties?.before);
+    const av = parseValue(comp.properties?.after);
+    if (bv && av && bv.kind === 'datetime' && av.kind === 'datetime' && bv.dateKey === av.dateKey) {
+      timeInfo = { bv, av };
+      break;
+    }
+  }
+
   const card = el('div', `card sev-${sev}`);
   const inner = el('div', 'card-inner');
 
-  // Header: avatar, agent name (secondary), severity dot, time.
+  // Header: avatar, agent name, severity dot, time, 詳細 chevron.
   const header = el('div', 'card-header');
   const avatar = el('div', 'avatar');
   const agent = task.agent || {};
@@ -717,12 +763,10 @@ function renderCard(task) {
   header.appendChild(timeWrap);
   inner.appendChild(header);
 
-  // Headline: the summary. The 承認すると… result statement lives in
-  // 詳細 (結果 row) — the front stays as short as possible.
+  // Headline: the summary. The result statement lives in 詳細 (結果 row).
   inner.appendChild(el('div', 'summary', task.summary || ''));
 
-  // Information reduction (P1/P8): caption/external texts are 裏面 material —
-  // they render inside the details panel, not on the front.
+  // Front components: caption/external texts are 裏面 material (P1/P8).
   const movedTexts = [];
   for (const comp of orderedComponents(task)) {
     const isNarrative = comp.component === 'Text' &&
@@ -731,8 +775,12 @@ function renderCard(task) {
     else inner.appendChild(renderComponent(comp, task));
   }
 
-  // Quiet meta: ONLY the urgent countdown (<=5m / past). 信頼度 is gone
-  // (user decision); the full deadline lives in 詳細 — one place, never two.
+  const hasExtra = hasContext || timeInfo || movedTexts.length > 0 ||
+    (impact && (impact.summary || impact.cost)) ||
+    (pct !== null && pct < 90 && reasons.length > 0) || !!task.expiresAt;
+
+  // Quiet meta: ONLY the urgent countdown (<=5m / past). The full
+  // deadline lives in 詳細 — one place, never two.
   if (typeof task.expiresAt === 'string' && task.expiresAt) {
     const parts = countdownParts(task.expiresAt, task.onExpire || 'drop');
     if (parts.cls === 'urgent' || parts.cls === 'past') {
@@ -746,40 +794,35 @@ function renderCard(task) {
     }
   }
 
-  // 詳細を見る — 結果/理由/誰が/参加者/出典/金額/注意点 expand downward.
-  const hasContext = !!(ctx && (ctx.reasoning || ctx.requester?.name ||
-    (Array.isArray(ctx.participants) && ctx.participants.length) || ctx.source?.label));
-  const hasExtra = hasContext || movedTexts.length > 0 || (impact && impact.summary) ||
-    (impact && impact.cost) ||
-    (pct !== null && pct < 90 && reasons.length > 0) || !!task.expiresAt;
+  // 詳細ビュワー: expands downward via card tap (see the click handler
+  // below); the header chevron signals it.
   if (hasExtra) {
-    const wrap = el('div', 'details');
-    const toggle = el('button', 'details-toggle');
-    toggle.type = 'button';
     const expanded = expandedIds.has(task.taskId);
-    const label = el('span', 'details-label', expanded ? '詳細を隠す' : '詳細を見る');
-    const chev = el('span', 'details-chev');
-    toggle.append(label, chev);
+    const wrap = el('div', 'details');
     const panel = el('div', 'details-panel' + (expanded ? ' open' : ''));
-    if (expanded) toggle.classList.add('open');
     const clip = el('div', 'details-clip');
-    clip.appendChild(buildDetailsList(task, { ctx, impact, reasons, movedTexts }));
+    clip.appendChild(buildDetailsList(task, { ctx, impact, reasons, movedTexts, timeInfo }));
     panel.appendChild(clip);
-    toggle.addEventListener('click', () => {
-      const open = !panel.classList.contains('open');
-      panel.classList.toggle('open', open);
-      toggle.classList.toggle('open', open);
-      label.textContent = open ? '詳細を隠す' : '詳細を見る';
-      if (open) expandedIds.add(task.taskId);
-      else expandedIds.delete(task.taskId);
-    });
-    wrap.append(toggle, panel);
+    wrap.append(panel);
     inner.appendChild(wrap);
   }
 
   card.appendChild(inner);
 
-  // Actions row: two decisions + snooze. 承認 carries the weight.
+  // Tap anywhere on the card toggles the details expansion (buttons,
+  // chips and links keep their own behaviour).
+  card.addEventListener('click', (e) => {
+    if (!hasExtra) return;
+    if (e.target.closest('button, a, .chip')) return;
+    const open = !expandedIds.has(task.taskId);
+    if (open) expandedIds.add(task.taskId);
+    else expandedIds.delete(task.taskId);
+    card.classList.toggle('expanded', open);
+    card.querySelector('.details-panel')?.classList.toggle('open', open);
+    card.querySelector('.details-chev')?.classList.toggle('open', open);
+  });
+
+  // Actions: 後で / 却下 / 承認. Inspect lives in the details panel.
   const actions = el('div', 'card-actions');
   const right = task.actions && task.actions.onSwipeRight;
   const left = task.actions && task.actions.onSwipeLeft;
@@ -872,15 +915,12 @@ function renderCard(task) {
   snz.type = 'button';
   snz.addEventListener('click', () => snooze(task));
 
-  actions.append(reject, snz, approve);
+  actions.append(reject, snz);
   card.appendChild(actions);
   return card;
 }
 
-/* 詳細パネル: 理由 / 誰が / 参加者 / 出典 / 金額 / 注意点 (P1: 裏面)。
- * All payload strings render via textContent (NFR-2.1); links are
- * restricted to http(s) so a payload can never become javascript:. */
-function buildDetailsList(task, { ctx, impact, reasons, movedTexts = [] }) {
+function buildDetailsList(task, { ctx, impact, reasons, movedTexts = [], timeInfo = null }) {
   const list = el('div', 'details-list');
 
   // horizontal row: icon + label left, value right (short values)
@@ -987,6 +1027,12 @@ function buildDetailsList(task, { ctx, impact, reasons, movedTexts = [] }) {
   }
   // 期限: shown here ONLY while the front shows no urgent countdown —
   // the deadline is displayed in exactly one place at any moment.
+  // 時刻: the ONLY place with exact numbers for a datetime change.
+  if (timeInfo) {
+    const delta = deltaLabel(timeInfo.bv, timeInfo.av);
+    rowW('schedule', '時刻', el('div', 'drow-value',
+      `変更前 ${timeInfo.bv.time} → 変更後 ${timeInfo.av.time}${delta ? ` (${delta})` : ''}`));
+  }
   if (typeof task.expiresAt === 'string' && task.expiresAt) {
     const parts = countdownParts(task.expiresAt, task.onExpire || 'drop');
     const onFront = parts.cls === 'urgent' || parts.cls === 'past';
@@ -1011,6 +1057,7 @@ function buildDetailsList(task, { ctx, impact, reasons, movedTexts = [] }) {
   }
   return list;
 }
+
 
 const expandedIds = new Set();
 
