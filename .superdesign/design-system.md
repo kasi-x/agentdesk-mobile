@@ -17,30 +17,39 @@ Key surfaces (single page): focused TriageCard + queue of mini rows + inspect bo
 5. **Countdown = display only**: expiry strip shows what the hub will do (自動承認/自動却下/緊急化/破棄) and must always read as "automatic", never as a fake human decision.
 6. **No code rendering**: every payload string is text (NFR-2.1); external-origin text sits in the italic quote block, visually separated from system UI (NFR-2.2).
 
-## Visual language — "color-pop" (2026-10, user-approved direction)
+## Visual language — "calm iOS" (2026-10, current direction)
 
-Reference: bold color-coded task cards on warm dark chrome with pill UI.
+Apple-minimal per user feedback (「本当に必要な情報をミニマルに出す」):
+the front carries only what the decision needs, one level deeper holds
+the context.
 
-- **The card surface IS the severity**: lime gradient `#D6EC86→#C2DF5F` = info,
-  amber `#F7D452→#EFBA2F` = warning, coral `#F4695C→#E94A3D` = critical.
-  Near-black ink text (`#1B1E16`) on the card; chrome stays warm dark
-  (`#191B16` bg, `#23251F` surfaces).
-- White pills (`rgba(255,255,255,.93)`) carry content components (DiffBox,
-  external quotes); dark pills (`rgba(20,22,16,.92)`) carry actions with
-  lime/coral icon accents; amber `#F5C842` is the CTA (pending pill,
-  Inspect, 修正して承認, segmented selection).
-- Urgent countdown flips to a white pill with red text; soon = white pill
-  with dark amber.
-- Inter + Hiragino/Noto Sans JP; tabular-nums for all numeric meta;
-  uppercase tracked micro-labels.
-- Radii: 24px cards, 24px sheet top, 999px pills. Max content width 540px.
-- Motion (meaning-serving, reduced-motion-safe): **Animate UI motion DNA**
-  translated to CSS — sampled framer spring (stiffness 200 / damping 20) as a
-  `linear()` easing token, blur reveal (blur 10→0) on cards/toasts with 40ms
-  per-element stagger, shine sweep (skewX -15°) on the amber CTA, counting
-  number tween on the pending pill, press `scale(.96)`, urgent pulse,
-  connected-dot breathing.
-- Flutter mirror: `mobile/lib/ui/colors.dart` (PopColors) + `theme.dart`.
+- **Neutral elevated cards** on true-black (`#0A0A0B` bg, `#1C1C1E`
+  card, `#2C2C2E` inset lists) — severity is a single 7px dot
+  (blue/orange/red), not a colored surface.
+- iOS system grays for text hierarchy: label `#FFFFFF`,
+  secondaryLabel `rgba(235,235,245,.6)`, tertiaryLabel `.3`;
+  fills `rgba(120,120,128,.24/.36)`; separator `rgba(84,84,88,.65)`.
+- Accent = systemBlue `#0A84FF`; semantic green `#30D158` /
+  red `#FF453A` / orange `#FF9F0A` only where meaning demands.
+- System font (-apple-system/SF, no webfont); headline 17px w600
+  tracking -0.02em; body 15px leading ~1.5; tabular-nums everywhere
+  numbers move.
+- Front layout: agent+dot+time (quiet row) → summary headline →
+  承認すると… line (result first, P3) → value-aware diff (calendar /
+  money chips + day timeline) → quiet meta (信頼度 · deadline, colored
+  only when it matters) → 詳細を見る toggle → actions (却下/Inspect/後で
+  gray-tinted + 承認 full-width tinted row; locked = red hold).
+- 詳細を見る expands an inset grouped list downward (grid-rows 0fr→1fr,
+  critically damped): なぜ / 誰が / 参加者(status dots) / 出典(link) /
+  金額 / 注意点 / 期限 — the TaskContext block.
+- Translucent materials: topbar/sheet/toast `backdrop-filter: blur()`
+  with content scrolling under; vibrancy = heavier weight + contrast on
+  translucent surfaces; scroll-edge hairlines only where chrome floats.
+- Motion: critically damped springs `cubic-bezier(.32,.72,0,1)`
+  (damping 1.0, response ~0.35s — Apple default); feedback on
+  pointer-down (`:active scale(.97)`); bounce only where momentum
+  exists (mobile swiper). prefers-reduced-motion / reduced-transparency
+  / contrast:more all respected.
 
 ## Motion patterns allowed
 

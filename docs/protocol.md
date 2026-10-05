@@ -111,6 +111,7 @@ Field notes:
 | `components` | req | adjacent list; render order = `TriageCard.children`, else array order |
 | `actions.inspectForm` | opt | bottom-sheet form components (§3.3) |
 | `actions.rejectReasons` | opt | `[{id, label}]` reject reason chips (I-118). The chosen id arrives as `data.reason` on the reply; no choice = reject without a reason. Malformed entries are dropped, non-array is `400` |
+| `context` | opt | structured 裏面 (back-of-card) context for the details panel — see below |
 | `expiresAt` | opt | ISO 8601 deadline; the hub runs `onExpire` at it (I-203, see below) |
 | `onExpire` | opt | `approve` \| `reject` \| `escalate` \| `drop` (default `drop`); requires `expiresAt` |
 
@@ -121,7 +122,9 @@ Card surface: `TriageCard` (root shell), `Text` (`variant`: `caption` |
 required by NFR-2.2), `DiffBox` (`title`, `before` red / `after` green,
 `highlight`: `info` | `warning` | `critical`; optional `rows` — list of
 `{label?, before?, after?}` multi-row changes rendered after the main
-pair; optional `inline` — unified-diff style string with `+`/`-`/space
+pair; optional `duration` — event length in minutes for the day-timeline
+visualization of datetime diffs (default 60); optional `inline` —
+unified-diff style string with `+`/`-`/space
 line prefixes, clients color added green / removed red / context dim,
 rendered as plain text never markup), `Chips`
 (`options[].label`, optional `actionName`+`payload` — tap sends that
@@ -182,6 +185,28 @@ re-broadcast as `createTaskCard`; clients must use the new nonce for any
 further triage of that task. `409 too_late` once `processed` (or if the
 task was never committing); `409 bad_nonce` / `404` as usual. A second
 action inside the grace window still gets `409 already_processed`.
+
+### Context: the back of the card (P1/P3)
+
+```json
+{
+  "context": {
+    "requester": { "name": "Bさん", "onBehalfOf": "プロジェクトリード" },
+    "participants": [ { "name": "Aさん", "status": "busy 14:00" }, { "name": "自分", "status": "free" } ],
+    "reasoning": "参加者3名中2名が14:00に重複予定があるため…",
+    "source": { "label": "Gmail —「会議日程変更のお願い」", "url": "https://mail.example.com/…" }
+  }
+}
+```
+
+All fields optional; the card is valid without `context`. Clients render
+it in the 詳細を見る expansion (common path first, context one level
+deeper — P1: judgment only on the front). Malformed pieces are **dropped
+by validation, never rejected** (advisory display data, same rule as
+`impact`). `source.url` / `requester.avatarUrl` must be http(s) —
+anything else is dropped, so a payload can never produce a
+`javascript:` link. Status strings are free-form; clients color dots by
+convention (`free` → green, `busy`/重複 → red, else neutral).
 
 ### Expiry: `expiresAt` / `onExpire` (I-203)
 
