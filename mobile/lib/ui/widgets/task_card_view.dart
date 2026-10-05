@@ -285,7 +285,11 @@ class _TaskCardViewState extends State<TaskCardView> {
             child: open
                 ? Padding(
                     padding: const EdgeInsets.only(bottom: 12),
-                    child: _DetailsPanel(task: task, movedTexts: _movedTexts),
+                    child: _DetailsPanel(
+                          task: task,
+                          movedTexts: _movedTexts,
+                          onInspect: widget.onInspect,
+                        ),
                   )
                 : const SizedBox(width: double.infinity),
           ),
@@ -363,8 +367,13 @@ class _TaskCardViewState extends State<TaskCardView> {
 class _DetailsPanel extends StatelessWidget {
   final TaskCard task;
   final List<CardComponent> movedTexts;
+  final VoidCallback? onInspect;
 
-  const _DetailsPanel({required this.task, this.movedTexts = const []});
+  const _DetailsPanel({
+    required this.task,
+    this.movedTexts = const [],
+    this.onInspect,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -376,6 +385,7 @@ class _DetailsPanel extends StatelessWidget {
     final quotes = movedTexts
         .where((c) => c.properties['source'] == 'external')
         .toList();
+    final form = task.inspectForm;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 4),
       decoration: BoxDecoration(
@@ -386,8 +396,7 @@ class _DetailsPanel extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (impact?.summary != null)
-            _row(
-              '結果',
+            _rowWide(Icons.bolt, '結果',
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -397,13 +406,14 @@ class _DetailsPanel extends StatelessWidget {
                   if (impact.reversible == false)
                     const Text('この操作は取り消せません',
                         style: TextStyle(
-                            fontSize: 13, color: PopColors.text2)),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: PopColors.red)),
                 ],
               ),
             ),
           if (narrative.isNotEmpty || ctx?.reasoning != null)
-            _row(
-              'なぜ',
+            _rowWide(Icons.lightbulb_outline, 'なぜ',
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -419,111 +429,113 @@ class _DetailsPanel extends StatelessWidget {
               ),
             ),
           for (final c in quotes)
-            _row('引用', ComponentRenderer(component: c)),
+            _rowWide(Icons.mail_outline, '引用',
+                ComponentRenderer(component: c)),
           if (ctx?.requesterName != null)
-            _row(
-              '誰が',
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(ctx!.requesterName!,
-                      style: const TextStyle(fontSize: 14, color: PopColors.text)),
-                  if (ctx.requesterOnBehalfOf != null)
-                    Text('${ctx.requesterOnBehalfOf} の依頼',
-                        style: const TextStyle(fontSize: 13, color: PopColors.text2)),
-                ],
-              ),
-            ),
+            _rowInline(Icons.person_outline, '誰が', Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 4,
+              children: [
+                Text(ctx!.requesterName!,
+                    style: const TextStyle(
+                        fontSize: 14, color: PopColors.text)),
+                if (ctx.requesterOnBehalfOf != null)
+                  Text('· ${ctx.requesterOnBehalfOf} の依頼',
+                      style: const TextStyle(
+                          fontSize: 13, color: PopColors.text2)),
+              ],
+            )),
           if (ctx != null && ctx.participants.isNotEmpty)
-            _row(
-              '参加者',
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: [
-                  for (final p in ctx.participants)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 11, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: PopColors.fill2,
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            width: 6,
-                            height: 6,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: _statusColor(p.status),
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          Text(p.name,
-                              style: const TextStyle(
-                                  fontSize: 13, color: PopColors.text)),
-                          if (p.status != null) ...[
-                            const SizedBox(width: 4),
-                            Text(p.status!,
-                                style: const TextStyle(
-                                    fontSize: 12, color: PopColors.text2)),
-                          ],
-                        ],
-                      ),
+            _rowInline(Icons.group_outlined, '参加者', Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              alignment: WrapAlignment.end,
+              children: [
+                for (final p in ctx.participants)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 11, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: PopColors.fill2,
+                      borderRadius: BorderRadius.circular(999),
                     ),
-                ],
-              ),
-            ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 6,
+                          height: 6,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: _statusColor(p.status),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(p.name,
+                            style: const TextStyle(
+                                fontSize: 13, color: PopColors.text)),
+                        if (p.status != null) ...[
+                          const SizedBox(width: 4),
+                          Text(p.status!,
+                              style: const TextStyle(
+                                  fontSize: 12, color: PopColors.text2)),
+                        ],
+                      ],
+                    ),
+                  ),
+              ],
+            )),
           if (ctx?.sourceLabel != null)
-            _row(
-              '出典',
-              Text(
+            _rowInline(Icons.link, '出典', Text(
                 ctx!.sourceLabel! + (ctx.sourceUrl != null ? ' ↗' : ''),
                 style: const TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w500,
-                    color: PopColors.blue),
-              ),
-            ),
+                    color: PopColors.blue))),
           if (impact?.costAmount != null && impact!.costCurrency != null)
-            _row(
-              '金額',
-              Text(
+            _rowInline(Icons.payments_outlined, '金額', Text(
                 '${impact.costCurrency} ${_amount(impact.costAmount!)}',
                 style: const TextStyle(
-                    fontSize: 14, color: PopColors.text),
-              ),
-            ),
+                    fontSize: 14,
+                    fontFeatures: [FontFeature.tabularFigures()],
+                    color: PopColors.text))),
           if (task.confidenceReasons.isNotEmpty)
-            _row(
-              '注意点',
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: [
-                  for (final r in task.confidenceReasons)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: PopColors.fill2,
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(r,
-                          style: const TextStyle(
-                              fontSize: 12, color: PopColors.text2)),
+            _rowInline(Icons.warning_amber_outlined, '注意点', Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              alignment: WrapAlignment.end,
+              children: [
+                for (final r in task.confidenceReasons)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: PopColors.fill2,
+                      borderRadius: BorderRadius.circular(999),
                     ),
-                ],
-              ),
-            ),
+                    child: Text(r,
+                        style: const TextStyle(
+                            fontSize: 12, color: PopColors.text2)),
+                  ),
+              ],
+            )),
           if (task.expiresAt != null)
-            _row(
-              '期限',
-              Text(
+            _rowInline(Icons.schedule, '期限', Text(
                 '${_formatDeadline(task.expiresAt!)} — ${_verb(task.onExpire)}',
-                style: const TextStyle(fontSize: 14, color: PopColors.text),
+                style: const TextStyle(
+                    fontSize: 14,
+                    fontFeatures: [FontFeature.tabularFigures()],
+                    color: PopColors.text))),
+          if (form.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 12, bottom: 8),
+              child: SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  icon: const Icon(Icons.edit_outlined, size: 16),
+                  label: const Text('修正して承認'),
+                  onPressed: onInspect,
+                ),
               ),
             ),
         ],
@@ -555,25 +567,47 @@ class _DetailsPanel extends StatelessWidget {
     return '${local.month}/${local.day} ${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
   }
 
-  Widget _row(String label, Widget value) {
+  Widget _rowWide(IconData icon, String label, Widget value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 10),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            label,
-            style: const TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.6,
-              color: PopColors.text3,
-            ),
-          ),
-          const SizedBox(height: 4),
+          _head(icon, label),
+          const SizedBox(height: 5),
           value,
         ],
       ),
+    );
+  }
+
+  Widget _rowInline(IconData icon, String label, Widget value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Row(
+        children: [
+          _head(icon, label),
+          const Spacer(),
+          Flexible(child: value),
+        ],
+      ),
+    );
+  }
+
+  Widget _head(IconData icon, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 15, color: PopColors.text3),
+        const SizedBox(width: 7),
+        Text(
+          label,
+          style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: PopColors.text2),
+        ),
+      ],
     );
   }
 }
