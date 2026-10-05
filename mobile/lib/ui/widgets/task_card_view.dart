@@ -29,6 +29,7 @@ class TaskCardView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (cardTop, cardBottom) = PopColors.severityCard(task.severity);
+    final cardGlow = PopColors.severityGlow(task.severity);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
       child: Container(
@@ -41,6 +42,13 @@ class TaskCardView extends StatelessWidget {
           ),
           borderRadius: BorderRadius.circular(24),
           boxShadow: [
+            // severity-tinted ambient glow (Animate UI style depth)
+            BoxShadow(
+              color: cardGlow,
+              blurRadius: 48,
+              offset: const Offset(0, 14),
+              spreadRadius: -8,
+            ),
             BoxShadow(
               color: Colors.black.withValues(alpha: 0.42),
               blurRadius: 24,
