@@ -34,30 +34,47 @@ npm run smoke        # end-to-end smoke test against a running `wrangler dev`
 ```
 
 Local dev secrets live in `backend/.dev.vars` (git-ignored; copy from
-`.dev.vars.example`): `AGENT_TOKEN`, `CLIENT_TOKEN`. In production:
-`wrangler secret put AGENT_TOKEN` / `wrangler secret put CLIENT_TOKEN`.
+`.dev.vars.example`): `AGENT_TOKEN`, `CLIENT_TOKEN`,
+optional `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT`
+(Web Push sender; push silently skipped when unset). In production:
+`wrangler secret put AGENT_TOKEN` / `wrangler secret put CLIENT_TOKEN`
+(/ `VAPID_*`).
 
 ### Mock agent (`tools/`)
 
-Dependency-free Node script for local E2E (Phase 1 verification:
-"swipe decisions reach the agent callback URL"):
+Dependency-free Node script for local E2E:
 
 ```bash
-node tools/mock-agent.mjs listen   # prints triage replies delivered back to the agent
-node tools/mock-agent.mjs send     # POSTs 3 sample task cards to the hub
+node tools/mock-agent.mjs listen             # prints triage replies (verifies HMAC signature)
+node tools/mock-agent.mjs send               # POSTs 3 sample task cards to the hub
+node tools/mock-agent.mjs update [taskId]    # replace a pending card (nonce rotates)
+node tools/mock-agent.mjs withdraw [taskId]  # retract a pending card
+node tools/mock-agent.mjs result <taskId>    # long-poll the decision result
 # env: HUB_URL (default http://127.0.0.1:8787), AGENT_TOKEN, CALLBACK_PORT
 ```
 
+### SDKs (`sdk/`) and MCP server (`tools/mcp-server/`)
+
+- `sdk/typescript/` (zero-dep, node >= 18): `desk.ask(card, {timeout})`
+  blocks via `GET /api/v1/tasks/{id}/result?wait=60` until a human
+  decides; `desk.update` / `desk.withdraw`, `replyHandler()` verifies
+  `X-AgentDesk-Signature`.
+- `sdk/python/` (stdlib-only): same API (`Desk.ask/update/withdraw`,
+  `verify_signature`). See `docs/sdk.md`.
+- `tools/mcp-server/`: dependency-free stdio MCP server exposing
+  `agentdesk_ask` / `agentdesk_result` (HUB_URL/AGENT_TOKEN from env).
+
 ### Mobile (Flutter)
 
-No Flutter SDK was available when this project was scaffolded. After
-installing Flutter (>= 3.5), bootstrap the platform folders once:
+Flutter SDK is installed (`~/sdk/flutter`, 3.47.x track). Platform
+folders `mobile/ios/` + `mobile/android/` are committed and tracked;
+only IDE files (`.idea/`, `*.iml`) are excluded. Conventions:
 
 ```bash
 cd mobile
-flutter create --platforms=ios,android --org dev.agentdesk .
+export PATH=$PATH:~/sdk/flutter/bin
 flutter pub get
-flutter analyze
+flutter analyze      # must be clean
 flutter test
 flutter run
 ```
@@ -65,6 +82,10 @@ flutter run
 Point the app at the hub via the in-app Settings screen (hub URL +
 client token, persisted with shared_preferences; dev defaults match
 `backend/.dev.vars.example`).
+
+Interfaces for optional hub surfaces stay probe-based (`api is HubApiV2`
+→ local fallback; `api is HubRulesApi` → read-only rules sheet), so
+the app degrades cleanly against older hubs.
 
 ## Directory layout
 
@@ -74,14 +95,20 @@ backend/              Cloudflare Worker: webhook + SSE + action endpoints + web 
   src/task-hub.ts     Durable Object: task store, SSE sessions, nonce lock
   src/protocol.ts     wire types, validation, pure CAS decision (unit-tested)
   src/protocol.test.ts
+  src/webpush.ts      RFC 8291 aes128gcm + VAPID sender (WebCrypto only)
 mobile/               Flutter app (card stack UI, SSE, offline queue)
   lib/models/         tolerant JSON parsing of the card payload
-  lib/services/       HubApi, SseClient, TaskRepository (state + queue)
+  lib/services/       HubApi (+HubApiV2, +HubRulesApi), SseClient, TaskRepository (state + queue)
   lib/ui/             triage stack, card view, component catalog, inspect sheet
   lib/ui/genui_form.dart  genui A2UI adapter for inspect-form rendering
-web/                  zero-build browser triage UI (served as Worker assets)
-tools/                mock-agent.mjs (send / listen) for local E2E
-docs/                 requirements (JA), protocol spec, architecture, philosophy, design-philosophy
+  ios/ android/       committed platform folders (IDE files excluded)
+web/                  zero-build browser triage UI (served as Worker assets):
+                      native ES modules (app.js = bootstrap; net/store/render/
+                      actions/inspect/history/fleet/pause/keyboard/settings/…),
+                      sw.js + manifest.webmanifest (PWA), qr.js (pairing encoder)
+tools/                mock-agent.mjs (send/listen/update/withdraw/result), mcp-server/
+sdk/typescript|python/ agent SDKs (ask/update/withdraw + HMAC verify)
+docs/                 requirements (JA), protocol spec, architecture, philosophy, design-philosophy, sdk.md
 IDEA.md               idea backlog (I-xxx ids, status)
 TODO.md               prioritized plan derived from IDEA.md
 
@@ -126,7 +153,12 @@ TODO.md               prioritized plan derived from IDEA.md
 - [ ] Phase 3: iOS Live Activities / Dynamic Island (WidgetKit via
       MethodChannel — Swift evaluated, deferred until a macOS/Xcode host
       exists), multi-device real-time sync polish, push (APNs/FCM).
+- [x] Protocol v1 + full TODO sweep: server snooze, update/withdraw,
+      reply retry+HMAC, priority sort, groupKey+bulk, pause/resume,
+      delegate, 2-party approvals, rules+leases, pairing+user DOs,
+      PWA+Web Push, SDKs+MCP, mobile gestures/tray/fleet/choose.
 
 Known MVP deviations from the spec (see docs/architecture.md):
 inspect is tap-only (up-swipe reserved so the card does not fly away);
-snooze is client-local; push notifications (APNs/FCM) are not wired yet.
+snooze is server-side (synced) with offline local fallback; push
+works via Web Push/PWA, APNs/FCM native credentials still pending.
