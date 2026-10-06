@@ -7,8 +7,8 @@ export const LS_QUEUE = 'agentdesk.offlineQueue';
 export const LS_SNOOZED = 'agentdesk.snoozedIds';
 export const LS_HISTORY = 'agentdesk.history';
 export const LS_PAUSED = 'agentdesk.paused';
+export const LS_ORDER = 'agentdesk.order';
 export const LS_QUIET = 'agentdesk.quiet';
-
 export const BACKOFF_INIT_MS = 1000;
 export const BACKOFF_MAX_MS = 30_000;
 export const TOAST_MS = 3000;
@@ -58,11 +58,11 @@ export function isParked(task) {
   return quietWindowActive(state.quiet) && task.severity !== 'critical';
 }
 
-/** Newest-first pending stack; snoozed tasks sit at the tail. */
 export const state = {
   hub: localStorage.getItem(LS_HUB) || location.origin,
   token: localStorage.getItem(LS_TOKEN) || '',
   stack: [], // TaskCard[]
+  order: localStorage.getItem(LS_ORDER) || 'urgent', // 'urgent'|'newest'|'agent'
   snoozedIds: new Set(readJson(LS_SNOOZED, [])), // local-fallback snoozes
   serverSnoozed: [], // [{taskId, until}] from snapshot — server-side snoozes (I-702)
   queue: readJson(LS_QUEUE, []), // ActionReply[] persisted FIFO
@@ -107,6 +107,58 @@ export function persistPaused() {
 
 export function persistQuiet() {
   localStorage.setItem(LS_QUIET, JSON.stringify(state.quiet));
+}
+
+// I-206: client-side priority modes — urgent/newest/agent.
+export function persistOrder() {
+  localStorage.setItem(LS_ORDER, state.order);
+}
+
+// Lazy sortTasks holder — populated once priority.js arrives; before that
+// (stale cache, tests without DOM) degrade to arrival order.
+let _sortTasks = null;
+export function _setSortTasks(fn) { _sortTasks = fn; }
+
+/** Re-sort the stack by the active mode; snoozed ids stay pinned at the tail.
+ *  Guarded: a stale cache that misses priority.js must not blank the page. */
+export function applyOrder() {
+  if (typeof _sortTasks !== 'function') return;
+  const non = [];
+  const snoozed = [];
+  for (const t of state.stack) {
+    (state.snoozedIds.has(t.taskId) ? snoozed : non).push(t);
+  }
+  const now = Date.now();
+  state.stack = _sortTasks(non, state.order, now).concat(_sortTasks(snoozed, state.order, now));
+}
+
+export const ORDER_LABELS = { urgent: '緊急順', newest: '新しい順', agent: 'エージェント順' };
+export const ORDER_CYCLE = ['urgent', 'newest', 'agent'];
+
+export function updateOrderLabel() {
+  const labelEl = document.getElementById('order-label');
+  if (labelEl) labelEl.textContent = ORDER_LABELS[state.order] || ORDER_LABELS.urgent;
+}
+
+/** 並び替えモードを切り替えて永続化し、山札を並べ直す。 */
+export function setOrder(mode) {
+  state.order = ORDER_LABELS[mode] ? mode : 'urgent';
+  persistOrder();
+  applyOrder();
+  updateOrderLabel();
+}
+/** Header #order-toggle button — cycle urgent → newest → agent. */
+export function wireOrder() {
+  updateOrderLabel();
+  const btn = document.getElementById('order-toggle');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    const i = ORDER_CYCLE.indexOf(state.order);
+    const next = ORDER_CYCLE[(i + 1) % ORDER_CYCLE.length];
+    setOrder(next);
+    import('./render.js').then(({ render }) => render()).catch(() => {});
+    import('./dom.js').then(({ toast }) => toast(`並び替え: ${ORDER_LABELS[state.order]}`)).catch(() => {});
+  });
 }
 
 /** Stack filtered by the Fleet agent lane (I-603) and quiet hours (I-402). */

@@ -42,7 +42,14 @@
 
 ## Done
 
-- [x] **並び順を緊急順に** (I-123, I-206): `priority` スコア（severity + 期限近接 + confidence + 経過時間）算出と優先度降順ソート
+- [x] **並び順を緊急順に** (I-123, I-206): `priority` スコア（severity + 期限近接 + confidence + 経過時間）算出と優先度降順ソート（ハブ算出 — 初期スナップショットの並び順に使用）
+- [x] **優先度スコアのクライアント側算出** (I-123, I-206): 緊急順(既定)/新しい順/エージェント順の
+      切替。優先度スコアはクライアント側で算出(プロトコル変更なし):
+      期限40・severity25・金額15(log10)・信頼度の逆数10・待ち時間15。
+      JS (`web/priority.js`) と Dart (`mobile/lib/services/priority.dart`) で同一式。
+      web はトップバーのサイクルボタン + localStorage 永続化、mobile は AppBar の
+      PopupMenuButton + SharedPreferences 永続化。スヌーズ済みは全モードで末尾固定、
+      escalate 再配信でスコア再計算して再整列。node:test 7件 + flutter_test 11件追加。
 - [x] **サーバー側スヌーズ**: `POST /api/v1/actions` の `snooze` アクション、全端末 dismiss 同期、DO alarm での自動再浮上
 - [x] **カードの更新と取り下げ** (I-204, I-205): `POST /api/v1/tasks/{id}/update` (nonce 再発行 + revised:true) / `withdraw` (全端末 dismiss)
 - [x] **replyUrl の信頼性** (I-604, I-801): 指数バックオフ再試行 (最大5回) + HMAC-SHA256 署名ヘッダ、最終失敗を `deliveryFailed` SSE + `/state` に記録

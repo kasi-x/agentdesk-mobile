@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/task_card.dart';
 import '../models/triage_action.dart';
+import '../services/priority.dart';
 import '../services/task_repository.dart';
 import 'inspect_sheet.dart';
 import 'colors.dart';
@@ -284,6 +285,7 @@ class _TriageScreenState extends State<TriageScreen> {
               ),
             ),
           ),
+          _OrderMenu(repo: repo),
           IconButton(
             icon: const Icon(Icons.grid_view_rounded),
             tooltip: '俯瞰',
@@ -1010,6 +1012,38 @@ class _PendingBadge extends StatelessWidget {
           color: PopColors.text,
         ),
       ),
+    );
+  }
+}
+
+/// 山札の並び順を切り替えるメニュー（I-123 / I-206）。選択すると
+/// リポジトリに永続化し、既存の listen 配線で画面が再描画される。
+class _OrderMenu extends StatelessWidget {
+  final TaskRepository repo;
+
+  const _OrderMenu({required this.repo});
+
+  static const Map<StackOrder, String> _labels = <StackOrder, String>{
+    StackOrder.urgent: '緊急順',
+    StackOrder.newest: '新しい順',
+    StackOrder.agent: 'エージェント順',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<StackOrder>(
+      icon: const Icon(Icons.sort),
+      tooltip: '並び順',
+      initialValue: repo.order,
+      onSelected: (mode) => repo.setOrder(mode),
+      itemBuilder: (context) => <PopupMenuEntry<StackOrder>>[
+        for (final mode in StackOrder.values)
+          CheckedPopupMenuItem<StackOrder>(
+            value: mode,
+            checked: repo.order == mode,
+            child: Text(_labels[mode]!),
+          ),
+      ],
     );
   }
 }

@@ -8,6 +8,7 @@ import {
   queuedTaskIds,
   visibleUnits,
   SNOOZE_OPTIONS,
+  applyOrder,
 } from './store.js';
 import { toast } from './dom.js';
 import { agentName, riskLevel, choiceId, parseEditNumber, parseEditDateTime } from './util.js';
@@ -15,35 +16,43 @@ import { postAction, postUndo, postBulk, postSnooze, postDelegate } from './net.
 import { render } from './render.js';
 import { recordProcessed } from './history.js';
 import { renderStampBanner, passGate } from './stamp.js';
-
-/** Rebuild stack from a server snapshot (the hub's order: priority desc). */
+/** Rebuild stack from a server snapshot.
+ *  Priority `order` (I-206 urgent/newest/agent) owns the ordering once
+ *  priority.js has loaded — degrade to server `priority` / arrival order
+ *  only on a stale cache so the page never blanks. */
 export function applySnapshot(tasks) {
   const queued = queuedTaskIds();
   const pending = (tasks || []).filter(
     (t) => t && t.taskId && !queued.has(t.taskId),
   );
-  // Wire contract: snapshot carries `priority` and is ordered priority desc
-  // (createdAt asc tiebreak). Older hubs sent oldest→newest; keep that
-  // newest-first fallback when no card exposes a priority.
-  const ordered = pending.slice();
+  // Preserve wire contract: if any card carries server `priority`, sort
+  // by it; otherwise newest-first. applyOrder then re-sorts within the
+  // active client mode when sortTasks is ready.
+  let ordered;
   if (pending.some((t) => typeof t.priority === 'number')) {
-    ordered.sort((a, b) => (b.priority || 0) - (a.priority || 0) ||
+    ordered = pending.slice().sort((a, b) => (b.priority || 0) - (a.priority || 0) ||
       (Date.parse(a.createdAt || 0) - Date.parse(b.createdAt || 0)));
   } else {
-    ordered.reverse();
+    ordered = pending.slice().reverse();
   }
-  // Locally snoozed ids move to the tail.
+  // Merge: snapshot order → client `order` when priority.js is present.
+  // Do the merge by building snoozed partitions in arrival order first,
+  // then let applyOrder re-split them under the active mode.
   const fresh = [];
   const snoozed = [];
   for (const t of ordered) {
     (state.snoozedIds.has(t.taskId) ? snoozed : fresh).push(t);
   }
   state.stack = fresh.concat(snoozed);
+  applyOrder();
   clampSelection();
   render();
 }
 
-/** Insert or replace a card pushed over SSE (nonce rotation = replace). */
+/** Insert or replace a card pushed over SSE (nonce rotation = replace).
+ *  Escalate re-score: the hub may re-broadcast a card we hold with a
+ *  rotated nonce / bumped severity — treat the hub as truth (P9) and
+ *  replace in place, then re-apply the active `order`. */
 export function upsertTaskCard(task) {
   const i = state.stack.findIndex((t) => t.taskId === task.taskId);
   // A snoozed card resurfacing (I-702) is fresh — it goes to the head.
@@ -52,10 +61,13 @@ export function upsertTaskCard(task) {
   }
   if (i >= 0) {
     state.stack[i] = task;
+    // Escalated card may now need a different position (e.g. became critical).
+    applyOrder();
   } else if (state.snoozedIds.has(task.taskId)) {
     state.stack.push(task);
   } else {
     state.stack.unshift(task);
+    applyOrder();
   }
   render();
 }
@@ -97,6 +109,7 @@ export async function snooze(task, until) {
       state.snoozedIds.add(task.taskId);
       persistSnoozed();
       state.stack.push(task);
+      applyOrder();
     }
     toast('オフライン: この端末だけでスヌーズしました');
     render();
@@ -423,8 +436,6 @@ export async function flushQueue() {
 /**
  * Revert a triage decision (I-104). Offline-queued decisions are dropped
  * locally; sent ones ask the hub, which re-broadcasts the card via
- * createTaskCard (next snapshot restores it regardless).
- */
 export async function undo(taskId) {
   const task = state.undoable.get(taskId);
   if (!task) {
@@ -437,13 +448,11 @@ export async function undo(taskId) {
     state.queue.splice(qi, 1);
     persistQueue();
     state.stack.unshift(task);
+    applyOrder();
     render();
     toast('元に戻しました（送信前の操作を取り消し）');
     return;
   }
-  try {
-    const result = await postUndo(taskId, task.nonce);
-    if (result === 'ok') {
       toast('元に戻しました');
     } else {
       toast('元に戻せません（確定済み）');

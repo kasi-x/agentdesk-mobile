@@ -61,6 +61,20 @@ class DiffBox extends StatelessWidget {
     return out;
   }
 
+  List<Map<String, String>> get _others {
+    final raw = properties['others'];
+    if (raw is! List) return const [];
+    return [
+      for (final o in raw)
+        if (o is Map)
+          {
+            'start': '${o['start'] ?? ''}',
+            'end': '${o['end'] ?? ''}',
+            if (o['label'] != null) 'label': '${o['label']}',
+          },
+    ];
+  }
+
   String? get _inline {
     final raw = properties['inline'];
     if (raw is! String || raw.isEmpty) return null;
@@ -121,6 +135,7 @@ class DiffBox extends StatelessWidget {
             before: '${properties['before'] ?? ''}',
             after: '${properties['after'] ?? ''}',
             durationMin: int.tryParse('${properties['duration'] ?? ''}') ?? 60,
+            others: _others,
           ),
           for (final row in _rows) ...[
             const SizedBox(height: 2),
@@ -133,6 +148,7 @@ class DiffBox extends StatelessWidget {
                   label: row['label'],
                   durationMin:
                       int.tryParse('${properties['duration'] ?? ''}') ?? 60,
+                  others: _others,
                 ),
               )
             else
@@ -142,6 +158,7 @@ class DiffBox extends StatelessWidget {
                 label: row['label'],
                 durationMin:
                     int.tryParse('${properties['duration'] ?? ''}') ?? 60,
+                others: _others,
               ),
           ],
           if (_inline != null) ...[
@@ -258,12 +275,14 @@ class _ValuePair extends StatelessWidget {
   final String after;
   final String? label;
   final int durationMin;
+  final List<Map<String, String>> others;
 
   const _ValuePair({
     required this.before,
     required this.after,
     this.label,
     this.durationMin = 60,
+    this.others = const [],
   });
 
   @override
@@ -290,7 +309,7 @@ class _ValuePair extends StatelessWidget {
               ),
             ),
           if (meaningful)
-            _ValueChips(bv: bv, av: av, durationMin: durationMin)
+            _ValueChips(bv: bv, av: av, durationMin: durationMin, others: others)
           else ...[
             Text(
               before,
@@ -321,8 +340,14 @@ class _ValueChips extends StatelessWidget {
   final _ParsedValue bv;
   final _ParsedValue av;
   final int durationMin;
+  final List<Map<String, String>> others;
 
-  const _ValueChips({required this.bv, required this.av, this.durationMin = 60});
+  const _ValueChips({
+    required this.bv,
+    required this.av,
+    this.durationMin = 60,
+    this.others = const [],
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -392,6 +417,13 @@ class _ValueChips extends StatelessWidget {
             beforeTime: bv.time,
             afterTime: av.time,
             durationMin: durationMin,
+            others: others
+                .map((o) => (
+                      s: _minutesOf(o['start'] ?? '0:00'),
+                      e: _minutesOf(o['end'] ?? '0:00'),
+                      label: o['label'] ?? '',
+                    ))
+                .toList(),
           ),
       ],
     );
@@ -451,7 +483,10 @@ class _DayTimeline extends StatelessWidget {
     required this.beforeTime,
     required this.afterTime,
     required this.durationMin,
+    this.others = const [],
   });
+
+  final List<({int s, int e, String label})> others;
 
   @override
   Widget build(BuildContext context) {
@@ -462,6 +497,20 @@ class _DayTimeline extends StatelessWidget {
     if (end - start < 120) start = math.max(0, end - 120);
     final span = (end - start).toDouble();
     double frac(int m) => ((m - start) / span).clamp(0.0, 1.0);
+
+    // 他の予定: gray blocks showing why the slot moved (word labels only).
+    final otherBlocks = others
+        .where((o) => o.e > o.s && o.s >= start - 240 && o.e <= end + 240)
+        .toList();
+    int lo = math.min(b, a);
+    int hi = math.max(b, a) + durationMin;
+    for (final o in otherBlocks) {
+      lo = math.min(lo, o.s);
+      hi = math.max(hi, o.e);
+    }
+    start = math.max(0, (lo ~/ 60) * 60);
+    end = math.min(24 * 60, ((hi / 60).ceil()) * 60);
+    if (end - start < 120) start = math.max(0, end - 120);
     String fmt(int m) =>
         '${(m ~/ 60) % 24}:${(m % 60).toString().padLeft(2, '0')}';
     return Padding(
@@ -481,7 +530,13 @@ class _DayTimeline extends StatelessWidget {
                     ),
                   ),
                 ),
-                _slotBar(
+                for (final o in otherBlocks)
+                _otherBar(
+                  leftFrac: frac(o.s),
+                  widthFrac: (o.e - o.s) / span,
+                  label: o.label,
+                ),
+              _slotBar(
                   leftFrac: frac(b),
                   widthFrac: durationMin / span,
                   label: '${fmt(b)} – ${fmt(b + durationMin)}',
@@ -504,6 +559,36 @@ class _DayTimeline extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _otherBar({
+    required double leftFrac,
+    required double widthFrac,
+    required String label,
+  }) {
+    final w = widthFrac.clamp(0.02, 0.98);
+    final a = 2 * leftFrac / (1 - w) - 1;
+    return Align(
+      alignment: Alignment(a, 0),
+      child: FractionallySizedBox(
+        widthFactor: w,
+        child: Container(
+          height: 30,
+          margin: const EdgeInsets.symmetric(vertical: 4),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: PopColors.fill2,
+            borderRadius: BorderRadius.circular(9),
+          ),
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 10.5, color: PopColors.text2),
+          ),
+        ),
       ),
     );
   }

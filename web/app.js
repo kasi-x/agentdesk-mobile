@@ -11,7 +11,7 @@
  * · stamp (rubber-stamp guard) · quiet (chips render via render.js).
  */
 import { setConnected, toast } from './dom.js';
-import { state, quietWindowActive } from './store.js';
+import { state, quietWindowActive, wireOrder, applyOrder, _setSortTasks } from './store.js';
 import { fetchState, connect, applyEnvelope } from './net.js';
 import { wireSettings } from './settings.js';
 import { wireKeyboard } from './keyboard.js';
@@ -21,6 +21,13 @@ import { closeHistory, renderTray } from './history.js';
 import { closeInspect } from './inspect.js';
 import { renderStampBanner } from './stamp.js';
 import { render } from './render.js';
+
+// I-206: delayed priority import — styled degrade when the cache is stale.
+import('./priority.js').then(({ sortTasks }) => {
+  _setSortTasks(sortTasks);
+  applyOrder();
+  render();
+}).catch(() => { /* stale cache — keep arrival order until the next snapshot */ });
 
 export async function bootstrap() {
   if (state.reconnectTimer) {
@@ -85,6 +92,7 @@ function start() {
   wireSettings({ onSave: bootstrap });
   wireFleet();
   wirePauseControls();
+  wireOrder();
   renderPauseBanner();
   renderStampBanner();
   renderTray();
