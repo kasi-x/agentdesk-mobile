@@ -68,12 +68,6 @@ class AutoApprovalRule {
 
   /// Substring of `groupKey`; null = any.
   final String? groupKey;
-  final double? maxCost;
-
-S_T_C:
-    this.maxCost,
-P_T_S:
-      maxCost: maxCostRaw is num ? maxCostRaw.toDouble() : null,
 
   /// ISO 8601 instant after which the rule stops firing; null = no expiry.
   final String? leaseUntil;
@@ -91,13 +85,6 @@ P_T_S:
     this.severity = const <String>[],
     this.maxCost,
     this.minConfidence,
-    this.groupKey,
-    this.maxCost,
-    this.leaseUntil,
-    this.leaseMaxCount,
-    this.enabled = true,
-  });
-    this.severity = const <String>[],
     this.groupKey,
     this.leaseUntil,
     this.leaseMaxCount,

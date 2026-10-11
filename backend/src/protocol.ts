@@ -112,10 +112,11 @@ export interface RuleMatch {
   severity?: string[];
   /** Maximum `impact.cost.amount`; a card without a cost counts as 0. */
   maxCost?: number;
-  /** Minimum `confidence` score (0.0-1.0); a card without confidence counts as 0. */
-  minConfidence?: number;
   /** Substring of `groupKey`. */
   groupKey?: string;
+  /** Minimum `confidence` (0–1, inclusive): `card.confidence >= value`.
+   *  A card without a `confidence` never satisfies this constraint. */
+  minConfidence?: number;
 }
 
 /** A rule's self-limiting budget (I-602). The rule stops auto-approving
@@ -127,16 +128,21 @@ export interface RuleLease {
   maxCount?: number;
 }
 
-/** An auto-approval/rejection rule (I-304/I-807/I-1002): matching NEW pending cards are
- *  processed by the hub with `source: "auto_rule"`, counting against the
- *  lease. Stored in the hub and managed via `GET/PUT /api/v1/rules`. */
+/** An auto-approval/-rejection rule (I-304/I-807/I-1002): matching NEW
+ *  pending cards are decided by the hub with `source: "auto_rule"`,
+ *  counting against the lease. Stored in the hub and managed via
+ *  `GET/PUT /api/v1/rules`. `action` defaults to `"approve"` for
+ *  rules written before the guardrail extension. */
 export interface Rule {
   id: string;
-  /** What to do when matched. Defaults to "approve" for backwards compatibility. */
-  action?: "approve" | "reject";
   match: RuleMatch;
   lease?: RuleLease;
   enabled: boolean;
+  /** Hub decision for matching cards (default `"approve"`). */
+  action?: "approve" | "reject";
+  /** `"learned"` marks rules created from a human swipe (I-1003);
+   *  absent/`"manual"` otherwise. Advisory only — never matched on. */
+  source?: "manual" | "learned";
 }
 
 /** True when this rule is currently allowed to fire for `task` at `now`,
@@ -163,7 +169,10 @@ export function ruleMatches(rule: Rule, task: TaskCardPayload, now: number): boo
   if (m.maxCost !== undefined && (task.impact?.cost?.amount ?? 0) > m.maxCost) {
     return false;
   }
-  if (m.minConfidence !== undefined && (task.confidence ?? 0) < m.minConfidence) {
+  if (
+    m.minConfidence !== undefined &&
+    (task.confidence === undefined || task.confidence < m.minConfidence)
+  ) {
     return false;
   }
   return true;
@@ -233,6 +242,10 @@ export interface ActionReply {
   /** ISO 8601 instant the snoozed card resurfaces; required with
    *  `action: "snooze"`, at most 7 days out. */
   until?: string;
+  /** I-1003: on a committed approve/reject, also learn a `"learned"`
+   *  rule from this card's agent/severity/groupKey. Advisory only —
+   *  ignored on snooze/delegate/partial approvals. */
+  learnRule?: true;
 }
 
 /** Longest accepted snooze duration. */
@@ -972,6 +985,7 @@ export function validateActionReply(
           : new Date().toISOString(),
       source: typeof body.source === "string" ? body.source : "unknown",
       ...(isRecord(body.data) ? { data: body.data } : {}),
+      ...(body.learnRule === true ? { learnRule: true as const } : {}),
     },
   };
 }
@@ -1080,17 +1094,22 @@ export function validateRules(body: unknown): ValidationResult<Rule[]> {
         }
         match.maxCost = m.maxCost;
       }
-      if (m.minConfidence !== undefined) {
-        if (typeof m.minConfidence !== "number" || !Number.isFinite(m.minConfidence)) {
-          return fail("rule.match.minConfidence must be a number");
-        }
-        match.minConfidence = m.minConfidence;
-      }
       if (m.groupKey !== undefined) {
         if (typeof m.groupKey !== "string") {
           return fail("rule.match.groupKey must be a string");
         }
         match.groupKey = m.groupKey;
+      }
+      if (m.minConfidence !== undefined) {
+        if (
+          typeof m.minConfidence !== "number" ||
+          !Number.isFinite(m.minConfidence) ||
+          m.minConfidence < 0 ||
+          m.minConfidence > 1
+        ) {
+          return fail("rule.match.minConfidence must be a number between 0 and 1");
+        }
+        match.minConfidence = m.minConfidence;
       }
     }
 
@@ -1117,83 +1136,26 @@ export function validateRules(body: unknown): ValidationResult<Rule[]> {
     if (typeof enabled !== "boolean") {
       return fail("rule.enabled must be a boolean");
     }
-    let action: "approve" | "reject" | undefined;
-    if (item.action !== undefined) {
-      if (item.action !== "approve" && item.action !== "reject") {
-        return fail("rule.action must be approve or reject");
-      }
-      action = item.action;
+    const action = item.action;
+    if (action !== undefined && action !== "approve" && action !== "reject") {
+      return fail('rule.action must be "approve" or "reject" when present');
     }
-
+    const source = item.source;
+    if (source !== undefined && source !== "manual" && source !== "learned") {
+      return fail('rule.source must be "manual" or "learned" when present');
+    }
     rules.push({
       id,
-      ...(action !== undefined ? { action } : {}),
       match,
       ...(lease !== undefined ? { lease } : {}),
       enabled,
+      // Absent stays absent: pre-I-1002 payloads round-trip unchanged
+      // (existing tests/clients); match time treats it as "approve".
+      ...(action !== undefined ? { action } : {}),
+      ...(source !== undefined ? { source } : {}),
     });
   }
   return { ok: true, value: rules };
-}
-
-export interface RulesSimulationRequest {
-  rules: Rule[];
-}
-
-export interface RulesSimulationResponse {
-  traffic: {
-    autoApproved: number;
-    hitl: number;
-    rejected: number;
-  };
-  totalCount: number;
-}
-/** Evaluate a rule set against a sample of tasks to preview traffic (I-1002). */
-export function simulateTraffic(
-  rules: Rule[],
-  tasks: TaskCardPayload[],
-  now: number,
-): RulesSimulationResponse {
-  const results = { autoApproved: 0, hitl: 0, rejected: 0 };
-  for (const task of tasks) {
-    const rule = rules.find((r) => ruleMatches(r, task, now));
-    if (!rule) {
-      results.hitl++;
-    } else if (rule.action === "reject") {
-      results.rejected++;
-    } else {
-      results.autoApproved++;
-    }
-  }
-  return {
-    traffic: results,
-    totalCount: tasks.length,
-  };
-}
-
-/**
- * Derives a conservative learned rule from a task and action (I-1003).
- *- Matches agent name and severity.
- *- Leases for 24h or 20 approvals.
- */
-export function suggestLearnedRule(
-  task: TaskCardPayload,
-  action: "approve" | "reject",
-  id: string,
-): Rule {
-  return {
-    id,
-    action,
-    match: {
-      agent: task.agent.name,
-      severity: [task.severity ?? "info"],
-    },
-    lease: {
-      until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-      maxCount: 20,
-    },
-    enabled: true,
-  };
 }
 
 /** One-time pairing code TTL (I-808). */
@@ -1248,4 +1210,63 @@ export function validateRedeemRequest(
     return fail("code (string) is required");
   }
   return { ok: true, value: { code } };
+}
+
+/** `POST /api/v1/rules/simulate` body (I-1002): an optional candidate
+ *  `match` evaluated on top of the stored rules plus an optional
+ *  candidate `action`. Both absent = dry-run the current rule set. */
+export interface SimulateRequest {
+  match?: RuleMatch;
+  action?: "approve" | "reject";
+}
+
+export function validateSimulateRequest(
+  body: unknown,
+): ValidationResult<SimulateRequest> {
+  if (body === undefined || body === null) return { ok: true, value: {} };
+  if (!isRecord(body)) return fail("payload must be a JSON object");
+  const out: SimulateRequest = {};
+  if (body.match !== undefined) {
+    if (!isRecord(body.match)) return fail("match must be an object");
+    const parsed = validateRules({ rules: [{ id: "candidate", match: body.match }] });
+    if (!parsed.ok) return fail(parsed.error.replace(/^rule\./, "match."));
+    out.match = parsed.value[0].match;
+  }
+  if (body.action !== undefined) {
+    if (body.action !== "approve" && body.action !== "reject") {
+      return fail('action must be "approve" or "reject" when present');
+    }
+    out.action = body.action;
+  }
+  return { ok: true, value: out };
+}
+
+/** `POST /api/v1/attachments` body (I-1001). */
+export interface AttachmentUpload {
+  kind: "audio" | "image";
+  contentType: string;
+  dataBase64: string;
+}
+
+/** Decoded size cap: 413 past 2 MiB. */
+export const MAX_ATTACHMENT_BYTES = 2 * 1024 * 1024;
+
+export function validateAttachmentUpload(
+  body: unknown,
+): ValidationResult<AttachmentUpload> {
+  if (!isRecord(body)) return fail("payload must be a JSON object");
+  const { kind, contentType, dataBase64 } = body;
+  if (kind !== "audio" && kind !== "image") {
+    return fail('kind must be "audio" or "image"');
+  }
+  if (typeof contentType !== "string" || contentType.length === 0) {
+    return fail("contentType (non-empty string) is required");
+  }
+  if (!/^[-\w.+]+\/[-\w.+]+$/.test(contentType)) {
+    return fail("contentType must look like a MIME type");
+  }
+  if (typeof dataBase64 !== "string" || dataBase64.length === 0) {
+    return fail("dataBase64 (non-empty string) is required");
+  }
+  return { ok: true, value: { kind, contentType, dataBase64 } };
 }

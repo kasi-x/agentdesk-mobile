@@ -1,27 +1,34 @@
 import {
   ActionReply,
   Approval,
+  AttachmentUpload,
   computePriority,
   decideAction,
   decideUndo,
   DeviceRecord,
   expiryDue,
   ExpiryDecision,
+  MAX_ATTACHMENT_BYTES,
   PAIR_TTL_MS,
   PairCode,
   PROTOCOL_VERSION,
   Rule,
   ruleMatches,
+  SimulateRequest,
   SnapshotPayload,
   StoredTask,
   TaskCardPayload,
   UNDO_GRACE_MS,
   UndoRequest,
+  validateAttachmentUpload,
   validatePairRequest,
   validateRedeemRequest,
   validateRules,
+  validateSimulateRequest,
 } from "./protocol";
 import { encodeSSE, json, sseHeaders, sleep } from "./http";
+import type { NativePushPayload, NativePushRegistration } from "./nativepush";
+import { sendNativePush, validateNativePushRegistration } from "./nativepush";
 import type { PushSubscription } from "./webpush";
 import { sendWebPush } from "./webpush";
 import type { Env } from "./env";
@@ -61,14 +68,120 @@ async function sha256Hex(payload: string): Promise<string> {
     .join("");
 }
 
+/** Strict standard-base64 decode (throws on malformed input). Tolerates
+ *  whitespace; rejects base64url on purpose (upload contract is base64). */
+function base64ToBytes(value: string): Uint8Array {
+  const compact = value.replace(/\s+/g, "");
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(compact)) {
+    throw new Error("malformed base64");
+  }
+  const binary = atob(compact);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+  return out;
+}
+
 /** Fleet pause state (I-403): present = paused; `until` optional. */
 interface PauseState {
   until?: string;
 }
 
+/** Metadata subset of one enqueued card, kept for `/rules/simulate`
+ *  (I-1002). Deliberately small: matching needs nothing else. */
+export interface SimulateSample {
+  agent: string;
+  severity?: string;
+  groupKey?: string;
+  cost?: number;
+  confidence?: number;
+  expiresAt?: string;
+}
+
+/** Rehydrate a sample as the thinnest card `ruleMatches` can evaluate.
+ *  Exported for tests. */
+export function sampleToTask(sample: SimulateSample): TaskCardPayload {
+  return {
+    type: "createTaskCard",
+    taskId: "simulate",
+    nonce: "simulate",
+    agent: { name: sample.agent },
+    summary: "simulate",
+    createdAt: new Date().toISOString(),
+    components: [],
+    actions: {},
+    ...(sample.severity !== undefined
+      ? { severity: sample.severity as TaskCardPayload["severity"] }
+      : {}),
+    ...(sample.groupKey !== undefined ? { groupKey: sample.groupKey } : {}),
+    ...(sample.cost !== undefined
+      ? { impact: { cost: { amount: sample.cost, currency: "USD" } } }
+      : {}),
+    ...(sample.confidence !== undefined ? { confidence: sample.confidence } : {}),
+    ...(sample.expiresAt !== undefined ? { expiresAt: sample.expiresAt } : {}),
+  };
+}
+
+/** Which bucket one history sample falls into: the first stored rule
+ *  that matches wins; otherwise the candidate (if supplied) is tried.
+ *  Lease budgets are ignored on purpose — the question is "what would
+ *  the rules match", not "what quota is left". Exported for tests. */
+export function simulateSampleDecision(
+  rules: Rule[],
+  sample: SimulateSample,
+  candidate: SimulateRequest,
+  now: number,
+): "approve" | "reject" | null {
+  const task = sampleToTask(sample);
+  for (const rule of rules) {
+    if (ruleMatches(rule, task, now)) return rule.action ?? "approve";
+  }
+  if (candidate.match !== undefined) {
+    const probe: Rule = {
+      id: "candidate",
+      match: candidate.match,
+      enabled: true,
+      action: candidate.action ?? "approve",
+    };
+    if (ruleMatches(probe, task, now)) return probe.action ?? "approve";
+  }
+  return null;
+}
+
+/** Count a history into `{sampleSize, autoApprove, autoReject, hitl}`.
+ *  Exported for tests; the DO handler feeds it storage rows. */
+export function simulateCounts(
+  rules: Rule[],
+  history: SimulateSample[],
+  candidate: SimulateRequest,
+  now: number,
+): { sampleSize: number; autoApprove: number; autoReject: number; hitl: number } {
+  let autoApprove = 0;
+  let autoReject = 0;
+  for (const sample of history) {
+    const decision = simulateSampleDecision(rules, sample, candidate, now);
+    if (decision === "approve") autoApprove++;
+    else if (decision === "reject") autoReject++;
+  }
+  return {
+    sampleSize: history.length,
+    autoApprove,
+    autoReject,
+    hitl: history.length - autoApprove - autoReject,
+  };
+}
+
 const KEY_PAUSE = "hub:pause";
 const KEY_RULES = "hub:rules";
 const KEY_LEASE = "hub:leaseUsed";
+/** Ring-buffer history of recent enqueued cards for /rules/simulate. */
+const KEY_HISTORY = "hub:recentTasks";
+/** Sample cap for the simulate history (spec: "last ~100"). */
+const HISTORY_CAP = 100;
+/** I-1001 attachments live next to tasks: `attach:<id>` → record. */
+const PREFIX_ATTACH = "attach:";
+/** Distinct namespace so native APNs/FCM tokens never collide with
+ *  webpush subscriptions (both fan out on every new card). */
+const PREFIX_NATIVE_PUSH = "nativepush:";
 const PREFIX_PAIR = "pair:";
 const PREFIX_DEVICE = "device:";
 const PREFIX_PUSH = "push:";
@@ -128,7 +241,7 @@ export class TaskHub {
       case "/rules":
         return this.rules(request);
       case "/rules/simulate":
-        return this.simulate(request);
+        return this.rulesSimulate(request);
       case "/pair":
         return this.pair(request);
       case "/pair/redeem":
@@ -139,24 +252,18 @@ export class TaskHub {
         return this.pushSubscribe(request);
       case "/push/unsubscribe":
         return this.pushUnsubscribe(request);
+      case "/push/native/register":
+        return this.nativeRegister(request);
+      case "/push/native/unregister":
+        return this.nativeUnregister(request);
+      case "/attachments/put":
+        return this.attachmentPut(request);
+      case "/attachments/get":
+        return this.attachmentGet(url);
       default:
         return json({ error: "not_found" }, 404);
     }
   }
-  /** Simulates the effect of a rule set against recent tasks (I-1002). */
-  private async simulate(request: Request): Promise<Response> {
-    const { rules } = (await request.json()) as { rules: Rule[] };
-    const now = Date.now();
-    const all = await this.state.storage.list<StoredTask>({ prefix: "task:" });
-    const recentTasks = Array.from(all.values())
-      .filter((t) => t.status === "pending")
-      .map((t) => t.task)
-      .slice(-50);
-
-    const { traffic, totalCount } = simulateTraffic(rules, recentTasks, now);
-    return json({ traffic, totalCount });
-  }
-
 
   /** SSE: snapshot first (reconnect resync), then live events. */
   private connect(): Response {
@@ -195,25 +302,37 @@ export class TaskHub {
       createdAt: now,
     };
 
-    // I-304/I-807: an enabled, unexhausted rule auto-approves matching NEW
-    // cards. Only cards enqueued after the rule is stored are evaluated —
-    // the pending backlog is never swept. An auto-approved card never
-    // reaches the stack, so no createTaskCard is broadcast for it.
+    // I-304/I-807/I-1002: an enabled, unexhausted rule auto-decides
+    // matching NEW cards (approve or reject per `rule.action`). Only cards
+    // enqueued after the rule is stored are evaluated — the pending
+    // backlog is never swept. An auto-decided card never reaches the
+    // stack, so no createTaskCard is broadcast for it.
     const rule = await this.matchingRule(stored.task, now);
     if (rule) {
       await this.state.storage.put(key, stored);
       await this.bumpLeaseUsed(rule.id);
-      await this.autoApprove(key, stored, rule);
+      await this.autoDecide(key, stored, rule);
       await this.rescheduleAlarm();
+      const decision = rule.action ?? "approve";
       return json(
-        { ok: true, taskId: task.taskId, autoApproved: true, byRule: rule.id },
+        {
+          ok: true,
+          taskId: task.taskId,
+          autoApproved: decision === "approve",
+          ...(decision === "reject" ? { autoRejected: true } : {}),
+          byRule: rule.id,
+        },
         201,
       );
     }
 
     await this.state.storage.put(key, stored);
     await this.broadcast("createTaskCard", this.present(stored, now));
-    // Web Push (I-701): new cards only — never on update/rebroadcast.
+    // I-1002: record the card's metadata subset for /rules/simulate,
+    // best-effort alongside the broadcast (never blocks the response).
+    this.state.waitUntil(this.recordHistory(stored.task));
+    // Web Push (I-701) + native APNs/FCM: new cards only — never on
+    // update/rebroadcast.
     this.state.waitUntil(this.notifySubscribers(stored.task));
     // A deadline on the new card may be earlier than anything pending.
     await this.rescheduleAlarm();
@@ -243,19 +362,21 @@ export class TaskHub {
     await this.state.storage.put(KEY_LEASE, used);
   }
 
-  /** Auto-approval goes through the normal commit record + delivery
+  /** Auto-decision goes through the normal commit record + delivery
    *  (grace 0): recorded as an outcome with `source: "auto_rule"` and
-   *  forwarded to `replyUrl` when set. */
-  private async autoApprove(
+   *  forwarded to `replyUrl` when set. The decision (approve/reject)
+   *  comes from `rule.action` (default `"approve"` for pre-I-1002 rows). */
+  private async autoDecide(
     key: string,
     stored: StoredTask,
     rule: Rule,
   ): Promise<void> {
     const now = Date.now();
+    const decision = rule.action ?? "approve";
     const reply: ActionReply = {
       taskId: stored.task.taskId,
       nonce: stored.nonce,
-      actionName: "approve",
+      actionName: decision,
       timestamp: new Date(now).toISOString(),
       source: "auto_rule",
       data: { byRule: rule.id },
@@ -266,7 +387,7 @@ export class TaskHub {
       processedAt: now,
       processedBy: "auto_rule",
       outcome: {
-        name: "approve",
+        name: decision,
         data: { byRule: rule.id },
         source: "auto_rule",
         at: reply.timestamp,
@@ -282,19 +403,20 @@ export class TaskHub {
     }
   }
 
-  /** Best-effort fan-out to every subscribed browser (I-701). Dead
-   *  subscriptions (404/410) are pruned on the spot. */
+  /** Best-effort fan-out to every subscribed browser (I-701) plus every
+   *  registered native token (APNs/FCM). Dead endpoints (404/410 from
+   *  webpush, gone/unregistered from native providers) are pruned on
+   *  the spot. */
   private async notifySubscribers(task: TaskCardPayload): Promise<void> {
+    const payload = {
+      title: "AgentDesk",
+      body: task.summary,
+      taskId: task.taskId,
+    };
     try {
       const subs = await this.state.storage.list<PushSubscription>({
         prefix: PREFIX_PUSH,
       });
-      if (subs.size === 0) return;
-      const payload = {
-        title: "AgentDesk",
-        body: task.summary,
-        taskId: task.taskId,
-      };
       for (const [subKey, sub] of subs) {
         try {
           const result = await sendWebPush(this.env, sub, payload);
@@ -306,6 +428,22 @@ export class TaskHub {
     } catch (err) {
       console.error("web push fan-out failed:", err);
     }
+    try {
+      const regs = await this.state.storage.list<NativePushRegistration>({
+        prefix: PREFIX_NATIVE_PUSH,
+      });
+      const nativePayload: NativePushPayload = payload;
+      for (const [regKey, reg] of regs) {
+        try {
+          const result = await sendNativePush(this.env, reg, nativePayload);
+          if (result === "gone") await this.state.storage.delete(regKey);
+        } catch (err) {
+          console.error(`native push to ${reg.platform} failed:`, err);
+        }
+      }
+    } catch (err) {
+      console.error("native push fan-out failed:", err);
+    }
   }
 
   /** Single accepted triage, shared by `/action` and `/bulk`. Returns a
@@ -314,21 +452,6 @@ export class TaskHub {
   private async applyTriage(reply: ActionReply): Promise<TriageOutcome> {
     const key = `task:${reply.taskId}`;
 
-    // I-1003: If auto-allow is requested, derive and store a rule.
-    if (reply.data?.autoAllow === true) {
-      const learnedRuleId = `auto-allow-${reply.taskId}`;
-      const newRule = suggestLearnedRule(
-        stored.task,
-        reply.actionName === "approve" ? "approve" : "reject",
-        learnedRuleId,
-      );
-      const currentRules = await this.getRules();
-      if (!currentRules.some((r) => r.id === learnedRuleId)) {
-        const updatedRules = [...currentRules, newRule];
-        await this.state.storage.put(KEY_RULES, updatedRules);
-        await this.broadcast("ruleChanged", { rules: updatedRules });
-      }
-    }
     // Input-gated critical section: nothing but storage I/O between the
     // read and the write (docs/architecture.md).
     const stored = await this.state.storage.get<StoredTask>(key);
@@ -424,6 +547,17 @@ export class TaskHub {
       taskId: reply.taskId,
       by: reply.source,
     });
+    // I-1003: learn a rule from this swipe once the commit is recorded.
+    // Fire-and-forget is wrong here (the rule must exist before the undo
+    // window closes, and the write is a single storage put) — but it
+    // never fails the action: errors are logged, the triage stands.
+    if (reply.learnRule === true) {
+      try {
+        await this.learnRuleFromSwipe(stored.task, reply);
+      } catch (err) {
+        console.error("learn rule from swipe failed:", err);
+      }
+    }
     return { ok: true, commitAt };
   }
 
@@ -502,14 +636,8 @@ export class TaskHub {
   private async undo(request: Request): Promise<Response> {
     const req = (await request.json()) as UndoRequest;
     const key = `task:${req.taskId}`;
-    // I-1003: If the decision was auto-allowed, delete the learned rule on undo.
-    if (stored.pendingReply?.data?.autoAllow === true) {
-      const learnedRuleId = `auto-allow-${stored.task.taskId}`;
-      const currentRules = await this.getRules();
-      const updatedRules = currentRules.filter((r) => r.id !== learnedRuleId);
-      await this.state.storage.put(KEY_RULES, updatedRules);
-      await this.broadcast("ruleChanged", { rules: updatedRules });
-    }
+
+    const stored = await this.state.storage.get<StoredTask>(key);
     const decision = decideUndo(stored, req);
     if (decision.kind === "not_found") {
       return json({ error: "task_not_found", taskId: req.taskId }, 404);
@@ -808,9 +936,9 @@ export class TaskHub {
     return json({ ok: true, paused: false });
   }
 
-  /** Auto-approval rule store (I-304/I-602/I-807). PUT replaces the whole
-   *  rule set; the new rules apply to cards enqueued from this moment —
-   *  the pending backlog is never swept. */
+  /** Auto-approval/-rejection rule store (I-304/I-602/I-807/I-1002). PUT
+   *  replaces the whole rule set; the new rules apply to cards enqueued
+   *  from this moment — the pending backlog is never swept. */
   private async rules(request: Request): Promise<Response> {
     if (request.method === "GET") {
       return json({ rules: await this.getRules() });
@@ -825,6 +953,85 @@ export class TaskHub {
       return json({ ok: true, rules: parsed.value });
     }
     return json({ error: "method_not_allowed" }, 405);
+  }
+
+  /** Metadata subset kept per enqueued card for `/rules/simulate`. */
+  private historyEntry(task: TaskCardPayload): SimulateSample {
+    return {
+      agent: task.agent.name,
+      ...(task.severity !== undefined ? { severity: task.severity } : {}),
+      ...(task.groupKey !== undefined ? { groupKey: task.groupKey } : {}),
+      ...(task.impact?.cost?.amount !== undefined
+        ? { cost: task.impact.cost.amount }
+        : {}),
+      ...(task.confidence !== undefined ? { confidence: task.confidence } : {}),
+      ...(task.expiresAt !== undefined ? { expiresAt: task.expiresAt } : {}),
+    };
+  }
+
+  /** Append one sample to the capped simulate ring buffer (I-1002).
+   *  Best-effort: storage errors are logged, never thrown. */
+  private async recordHistory(task: TaskCardPayload): Promise<void> {
+    try {
+      const history = (await this.state.storage.get<SimulateSample[]>(KEY_HISTORY)) ?? [];
+      history.push(this.historyEntry(task));
+      await this.state.storage.put(
+        KEY_HISTORY,
+        history.length > HISTORY_CAP ? history.slice(history.length - HISTORY_CAP) : history,
+      );
+    } catch (err) {
+      console.error("record simulate history failed:", err);
+    }
+  }
+
+  /** Dry-run the stored rules (+ an optional candidate) over the recent
+   *  card history (I-1002). Pure counting — no state changes. `match`
+   *  without `action` assumes `"approve"`; lease budgets are ignored on
+   *  purpose (the question is "what would the rules match", not "what
+   *  quota is left"). */
+  private async rulesSimulate(request: Request): Promise<Response> {
+    const parsed = validateSimulateRequest(await request.json());
+    if (!parsed.ok) {
+      return json({ error: "invalid_payload", detail: parsed.error }, 400);
+    }
+    const rules = await this.getRules();
+    const history = (await this.state.storage.get<SimulateSample[]>(KEY_HISTORY)) ?? [];
+    return json(simulateCounts(rules, history, parsed.value, Date.now()));
+  }
+
+  /** Learn one `"learned"` rule from a committed swipe (I-1003): the new
+   *  rule mirrors the card's agent/severity/groupKey and carries the
+   *  swipe's own decision. It is appended (never replaces) and takes
+   *  effect for cards enqueued afterwards. An identical rule (same
+   *  action + match) is not duplicated. */
+  private async learnRuleFromSwipe(task: TaskCardPayload, reply: ActionReply): Promise<void> {
+    const decision = reply.actionName === "approve" || reply.actionName === "reject"
+      ? reply.actionName
+      : null;
+    if (decision === null) return;
+    const rules = await this.getRules();
+    const match = {
+      agent: task.agent.name,
+      severity: [task.severity ?? "info"],
+      ...(task.groupKey !== undefined ? { groupKey: task.groupKey } : {}),
+    };
+    const duplicate = rules.some(
+      (rule) =>
+        (rule.action ?? "approve") === decision &&
+        rule.match.agent === match.agent &&
+        (rule.match.severity ?? []).join("|") === match.severity.join("|") &&
+        (rule.match.groupKey ?? undefined) === (match.groupKey ?? undefined),
+    );
+    if (duplicate) return;
+    const learned: Rule = {
+      id: `learned-${crypto.randomUUID().slice(0, 8)}`,
+      match,
+      enabled: true,
+      action: decision,
+      source: "learned",
+    };
+    await this.state.storage.put(KEY_RULES, [...rules, learned]);
+    await this.broadcast("ruleChanged", { rules: [...rules, learned] });
   }
 
   /**
@@ -946,6 +1153,81 @@ export class TaskHub {
     }
     await this.state.storage.delete(PREFIX_PUSH + (await sha256Hex(body.endpoint)));
     return new Response(null, { status: 204 });
+  }
+
+  /** Register a native APNs/FCM token (I-701 follow-up). Stored even
+   *  when the provider secrets are unset — sends then skip silently. */
+  private async nativeRegister(request: Request): Promise<Response> {
+    const parsed = validateNativePushRegistration(await request.json());
+    if (!parsed.ok) {
+      return json({ error: "invalid_payload", detail: parsed.error }, 400);
+    }
+    await this.state.storage.put<NativePushRegistration>(
+      PREFIX_NATIVE_PUSH + (await sha256Hex(`${parsed.value.platform}:${parsed.value.token}`)),
+      parsed.value,
+    );
+    return json({ ok: true }, 201);
+  }
+
+  /** Remove a native APNs/FCM token. */
+  private async nativeUnregister(request: Request): Promise<Response> {
+    const body = (await request.json()) as { platform?: unknown; token?: unknown };
+    if (
+      (body?.platform !== "apns" && body?.platform !== "fcm") ||
+      typeof body?.token !== "string"
+    ) {
+      return json(
+        { error: "invalid_payload", detail: 'platform ("apns"|"fcm") and token are required' },
+        400,
+      );
+    }
+    await this.state.storage.delete(
+      PREFIX_NATIVE_PUSH + (await sha256Hex(`${body.platform}:${body.token}`)),
+    );
+    return new Response(null, { status: 204 });
+  }
+
+  /** Stored attachment record (I-1001): small binary kept in the DO. */
+  private async attachmentPut(request: Request): Promise<Response> {
+    const parsed = validateAttachmentUpload(await request.json());
+    if (!parsed.ok) {
+      return json({ error: "invalid_payload", detail: parsed.error }, 400);
+    }
+    const { kind, contentType, dataBase64 } = parsed.value;
+    let bytes: Uint8Array;
+    try {
+      bytes = base64ToBytes(dataBase64);
+    } catch {
+      return json({ error: "invalid_payload", detail: "dataBase64 is not valid base64" }, 400);
+    }
+    if (bytes.length > MAX_ATTACHMENT_BYTES) {
+      return json(
+        { error: "too_large", detail: `decoded size exceeds ${MAX_ATTACHMENT_BYTES} bytes` },
+        413,
+      );
+    }
+    const id = `att_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+    const record: AttachmentUpload = { kind, contentType, dataBase64 };
+    await this.state.storage.put<AttachmentUpload>(PREFIX_ATTACH + id, record);
+    return json({ id, url: `/api/v1/attachments/${id}` }, 201);
+  }
+
+  /** Serve one stored attachment's raw bytes (I-1001). Auth is enforced
+   *  by the Worker router (client OR agent token) before this runs. */
+  private async attachmentGet(url: URL): Promise<Response> {
+    const id = url.searchParams.get("id") ?? "";
+    if (!id) return json({ error: "not_found" }, 404);
+    const record = await this.state.storage.get<AttachmentUpload>(PREFIX_ATTACH + id);
+    if (!record) return json({ error: "not_found" }, 404);
+    const bytes = base64ToBytes(record.dataBase64);
+    return new Response(bytes, {
+      status: 200,
+      headers: {
+        "content-type": record.contentType,
+        "content-length": String(bytes.length),
+        "cache-control": "private, max-age=3600",
+      },
+    });
   }
 
   /** POST the reply to `replyUrl` with an HMAC signature (I-604/I-801).
