@@ -198,6 +198,10 @@ class _TaskCardViewState extends State<TaskCardView> {
                         color: PopColors.text,
                       ),
                     ),
+                    if (task.impact?.reversible != null) ...[
+                      const SizedBox(height: 4),
+                      _reversiblePill(),
+                    ],
                     const SizedBox(height: 8),
                     for (final component in _frontComponents) ...[
                       ComponentRenderer(
@@ -376,6 +380,30 @@ class _TaskCardViewState extends State<TaskCardView> {
           fontFeatures: [FontFeature.tabularFigures()],
           fontWeight: FontWeight.w700,
           color: PopColors.blue,
+        ),
+      ),
+    );
+  }
+  /// Tiny reversibility pill for the front face only (never the back):
+  /// 「取り消し可」 when reversible, 「取り消し不可」 only when explicitly
+  /// false. Null (unknown) renders nothing — never guess.
+  Widget _reversiblePill() {
+    final reversible = task.impact?.reversible;
+    if (reversible == null) return const SizedBox.shrink();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: reversible
+            ? PopColors.fill2
+            : PopColors.red.withValues(alpha: 0.2),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        reversible ? '取り消し可' : '取り消し不可',
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          color: reversible ? PopColors.text2 : PopColors.red,
         ),
       ),
     );

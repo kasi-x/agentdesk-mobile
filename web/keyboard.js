@@ -42,9 +42,15 @@ function rejectTask(task) {
   });
 }
 
-/** Shift+→: 二段スワイプ相当 — approve and auto-allow the rule (I-101). */
+/** Shift+→: 二段スワイプ相当 — approve, propose automating the rule (I-101)
+ *  and thread the learn semantic to the hub as top-level `learnRule: true`
+ *  on the action POST (Executive Desk I-1003). */
 function twoStageApprove(task) {
-  approve(task, {source: 'web_ui', extra: {autoAllow: true}});
+  approve(task, {
+    source: 'web_ui',
+    extra: { proposeAutomation: true },
+    learnRule: true,
+  });
 }
 
 function onKeyDown(e) {

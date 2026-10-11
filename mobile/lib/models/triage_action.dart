@@ -7,6 +7,12 @@ class TriageActionReply {
   final String source;
   final Map<String, dynamic> data;
 
+  /// I-1003 swipe-to-learn: when true the hub learns a `"learned"` rule
+  /// from this card on commit (`POST /api/v1/actions {learnRule: true}`).
+  /// Advisory only — old hubs ignore the unknown key; snooze/delegate
+  /// and partial approvals ignore it server-side too.
+  final bool learnRule;
+
   TriageActionReply({
     required this.taskId,
     required this.nonce,
@@ -14,6 +20,7 @@ class TriageActionReply {
     required this.timestamp,
     required this.source,
     this.data = const <String, dynamic>{},
+    this.learnRule = false,
   });
 
   Map<String, dynamic> toJson() => <String, dynamic>{
@@ -23,6 +30,7 @@ class TriageActionReply {
         'timestamp': timestamp.toUtc().toIso8601String(),
         'source': source,
         if (data.isNotEmpty) 'data': data,
+        if (learnRule) 'learnRule': true,
       };
 
   factory TriageActionReply.fromJson(dynamic raw) {
@@ -47,6 +55,7 @@ class TriageActionReply {
       data: raw['data'] is Map
           ? Map<String, dynamic>.from(raw['data'] as Map)
           : const <String, dynamic>{},
+      learnRule: raw['learnRule'] == true,
     );
   }
 }

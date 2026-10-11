@@ -363,6 +363,84 @@ export default {
         );
       }
 
+      // Native push registration (I-701 follow-up): same bearer auth as
+      // the webpush subscribe endpoint; stored per scope-DO.
+      if (url.pathname === "/api/v1/push/native" && request.method === "POST") {
+        const scope = await clientScope(request, env);
+        if (scope === null) return unauthorized(request, env);
+        return cors(
+          await forwardJson(request, env, scope, "/push/native/register"),
+          request,
+          env,
+        );
+      }
+      if (url.pathname === "/api/v1/push/native" && request.method === "DELETE") {
+        const scope = await clientScope(request, env);
+        if (scope === null) return unauthorized(request, env);
+        const doRes = await hubStub(env, scope).fetch(
+          "https://task-hub/push/native/unregister",
+          {
+            method: "POST",
+            body: await request.text(),
+            headers: { "content-type": "application/json" },
+          },
+        );
+        if (doRes.status === 204) return cors(new Response(null, { status: 204 }), request, env);
+        return cors(rebuilt(doRes), request, env);
+      }
+
+      // Guardrail dry-run (I-1002): client bearer auth, per-scope rules.
+      if (url.pathname === "/api/v1/rules/simulate" && request.method === "POST") {
+        const scope = await clientScope(request, env);
+        if (scope === null) return unauthorized(request, env);
+        return cors(
+          await forwardJson(request, env, scope, "/rules/simulate"),
+          request,
+          env,
+        );
+      }
+
+      // Attachments (I-1001): upload needs the client token; download
+      // accepts the client token OR the agent token (the agent fetches
+      // the bytes after receiving the id inside action `data`).
+      if (url.pathname === "/api/v1/attachments" && request.method === "POST") {
+        const scope = await clientScope(request, env);
+        if (scope === null) return unauthorized(request, env);
+        return cors(
+          await forwardJson(request, env, scope, "/attachments/put"),
+          request,
+          env,
+        );
+      }
+      {
+        const attachmentRoute = url.pathname.match(/^\/api\/v1\/attachments\/([^/]+)$/);
+        if (attachmentRoute && request.method === "GET") {
+          const id = attachmentRoute[1];
+          const scope = await clientScope(request, env, true);
+          const agentOk = authorized(request, env.AGENT_TOKEN);
+          if (scope === null && !agentOk) return unauthorized(request, env);
+          const target = scope ?? "global";
+          const doRes = await hubStub(env, target).fetch(
+            `https://task-hub/attachments/get?id=${encodeURIComponent(id)}`,
+          );
+          // Binary bytes: pass through with a fresh header set so the
+          // immutable-subresponse problem (see rebuilt()) cannot recur.
+          const passthrough = new Response(doRes.body, {
+            status: doRes.status,
+            headers: {
+              "content-type": doRes.headers.get("content-type") ?? "application/octet-stream",
+              ...(doRes.headers.get("content-length") !== null
+                ? { "content-length": doRes.headers.get("content-length") as string }
+                : {}),
+              ...(doRes.headers.get("cache-control") !== null
+                ? { "cache-control": doRes.headers.get("cache-control") as string }
+                : {}),
+            },
+          });
+          return cors(passthrough, request, env);
+        }
+      }
+
       // Static assets (web UI) — no auth; the token is entered client-side.
       if (request.method === "GET") {
         const res = await env.ASSETS.fetch(request);

@@ -2,6 +2,14 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>音声メモをカードに添付するためにマイクを使います (I-1001)。</string>
+	<key>NSCameraUsageDescription</key>
+	<string>写真をカードに添付するためにカメラを使います (I-1001)。</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>写真をカードに添付するために写真ライブラリを使います (I-1001)。</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>

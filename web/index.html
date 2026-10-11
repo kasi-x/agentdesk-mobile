@@ -26,6 +26,7 @@
     <button id="snoozed-chip" class="chip-count" type="button" title="サーバーでスヌーズ中" hidden></button>
     <button id="quiet-chip" class="chip-count dim" type="button" title="おやすみ時間中に保留" hidden></button>
     <button id="fleet-toggle" class="btn ghost sm" type="button" aria-pressed="false" title="エージェント別レーン">Fleet</button>
+    <button id="guardrails-toggle" class="btn ghost sm" type="button" aria-pressed="false" title="自動承認ルール">ルール</button>
     <button id="pause-btn" class="btn danger sm" type="button" title="緊急停止">緊急停止</button>
     <button id="order-toggle" class="btn ghost sm" type="button" title="並び替え">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -47,6 +48,8 @@
 
   <section id="fleet-panel" class="fleet" aria-label="エージェント別レーン" hidden></section>
 
+  <div id="guardrails-backdrop" class="sheet-backdrop" hidden></div>
+  <section id="guardrails-panel" class="sheet guardrails-panel" aria-label="自動承認ルール" hidden></section>
   <section id="settings" class="settings" hidden>
     <label class="field">
       <span>Hub URL</span>

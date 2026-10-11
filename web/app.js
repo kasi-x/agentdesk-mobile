@@ -16,6 +16,7 @@ import { fetchState, connect, applyEnvelope } from './net.js';
 import { wireSettings } from './settings.js';
 import { wireKeyboard } from './keyboard.js';
 import { wireFleet } from './fleet.js';
+import { wireGuardrails } from './guardrails.js';
 import { wirePauseControls, renderPauseBanner } from './pause.js';
 import { closeHistory, renderTray } from './history.js';
 import { closeInspect } from './inspect.js';
@@ -91,6 +92,7 @@ function start() {
   wireKeyboard();
   wireSettings({ onSave: bootstrap });
   wireFleet();
+  wireGuardrails();
   wirePauseControls();
   wireOrder();
   renderPauseBanner();

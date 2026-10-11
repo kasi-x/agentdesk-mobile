@@ -3,6 +3,9 @@
 [IDEA.md](IDEA.md) で採用したものをタスクにして並べる。各項目の `(I-xxx)` は
 アイデアID、`P#` は [docs/philosophy.md](docs/philosophy.md) の原則番号。
 
+> **作業中メモ**: 本ブランチの進捗・環境再現手順・委託中タスクの契約は
+> [HANDOFF.md](HANDOFF.md) に集約。引き継ぎはそこから読む。
+
 ## 運用ルール
 
 - 上から順にやる。順番を変えるときは理由を一行添える。
@@ -40,8 +43,8 @@
 
 ## Phase 3(既存ロードマップ)
 
-- [ ] iOS Live Activities / Dynamic Island(WidgetKit via MethodChannel — macOS/Xcode 環境待ちのため保留)
-- [ ] APNs / FCM ネイティブプッシュ(PWA Web Push I-701 は完了済み。ネイティブは Apple/Firebase クレデンシャル待ち)
+- [ ] iOS Live Activities / Dynamic Island(実装済み: MethodChannel `dev.agentdesk/live_activities` + `ios/Runner/LiveActivityManager.swift` + `ios/LiveActivityWidget/` extension (SETUP.md)。Xcode ターゲット追加と実機検証は macOS ホスト待ち)
+- [ ] APNs / FCM ネイティブプッシュ(基盤実装済み: `POST/DELETE /api/v1/push/native` + APNs ES256 / FCM v1 送信 (シークレット未設定時は登録のみ保存) + iOS `NativePushManager.swift` + 設定画面 + docs/push.md。Android FCM クライアントは google-services.json 待ち。Apple/Firebase クレデンシャル待ち)
 - [x] マルチデバイス同期の磨き込み (snapshot reconcile、own-echo デデュープ、revised カード更新アニメーション)
 
 ## 雑務・技術的負債

@@ -13,3 +13,17 @@ CLIENT_TOKEN=dev-client-token
 # VAPID_PUBLIC_KEY=
 # VAPID_PRIVATE_KEY=
 # VAPID_SUBJECT=mailto:admin@localhost
+# Optional native push via APNs (I-701 follow-up). Registration stores
+# even when unset; delivery skips silently. APNS_PRIVATE_KEY is the .p8
+# P-256 key (PEM or base64/DER). APNS_SANDBOX=1 for development builds.
+# APNS_KEY_ID=
+# APNS_TEAM_ID=
+# APNS_PRIVATE_KEY=
+# APNS_BUNDLE_ID=
+# APNS_SANDBOX=
+# Optional native push via FCM v1 (I-701 follow-up, Android-later).
+# Same skip-when-unset pattern. FCM_PRIVATE_KEY is the service-account
+# RSA key (PEM or base64/DER; literal "\n" escapes are tolerated).
+# FCM_PROJECT_ID=
+# FCM_CLIENT_EMAIL=
+# FCM_PRIVATE_KEY=

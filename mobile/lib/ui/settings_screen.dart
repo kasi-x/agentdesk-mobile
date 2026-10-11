@@ -1,11 +1,14 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../config.dart';
+import '../services/hub_api.dart';
+import '../services/native_push.dart';
 import '../services/pairing.dart';
 import '../services/task_repository.dart';
+import 'guardrails_screen.dart';
 import 'widgets/practice_screen.dart';
-import 'widgets/rules_sheet.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -224,10 +227,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const Divider(height: 40),
           ListTile(
             contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.rule_outlined),
-            title: const Text('自動承認ルール'),
-            subtitle: const Text('新しいカードにのみ適用・上限付きで自動承認'),
-            onTap: () => RulesSheet.show(context),
+            leading: const Icon(Icons.shield_outlined),
+            title: const Text('ガードレール'),
+            subtitle: const Text('自動承認・自動拒否ルールとプレビュー'),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const GuardrailsScreen(),
+              ),
+            ),
           ),
           ListTile(
             contentPadding: EdgeInsets.zero,
@@ -237,8 +244,84 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onTap: () =>
                 Navigator.of(context).push(PracticeScreen.route()),
           ),
+          const _PushNotificationRow(),
         ],
       ),
+    );
+  }
+}
+
+/// NATIVE-PUSH: optional APNs row. iOS only (the service no-ops
+/// elsewhere); follows the quiet-hours/pairing status-text pattern.
+class _PushNotificationRow extends StatefulWidget {
+  const _PushNotificationRow();
+
+  @override
+  State<_PushNotificationRow> createState() => _PushNotificationRowState();
+}
+
+class _PushNotificationRowState extends State<_PushNotificationRow> {
+  bool _busy = false;
+  String? _status;
+
+  Future<void> _enable() async {
+    setState(() {
+      _busy = true;
+      _status = null;
+    });
+    final repo = context.read<TaskRepository>();
+    final api = repo.api;
+    final token = await NativePush().register();
+    if (!mounted) return;
+    if (token == null) {
+      setState(() {
+        _busy = false;
+        _status = defaultTargetPlatform == TargetPlatform.iOS
+            ? '通知が許可されませんでした'
+            : 'プッシュ通知は iOS のみ対応です';
+      });
+      return;
+    }
+    final ok = api is HttpHubApi
+        ? await api.registerNativePush(platform: 'apns', token: token)
+        : false;
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _status = ok ? 'プッシュ通知を有効にしました' : 'ハブへの登録に失敗しました';
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.notifications_outlined),
+          title: const Text('プッシュ通知'),
+          subtitle: const Text('新規カードを iOS 通知で受け取る（任意）'),
+          trailing: _busy
+              ? const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : TextButton(
+                  onPressed: _enable,
+                  child: const Text('有効にする'),
+                ),
+        ),
+        if (_status != null)
+          Padding(
+            padding: const EdgeInsets.only(left: 56, bottom: 8),
+            child: Text(
+              _status!,
+              style: const TextStyle(fontSize: 12, color: Colors.white54),
+            ),
+          ),
+      ],
     );
   }
 }

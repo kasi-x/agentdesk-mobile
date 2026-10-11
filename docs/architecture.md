@@ -139,3 +139,11 @@ by parsed data — no WebView/eval anywhere (NFR-2.1).
 - Snooze is client-local (moves to stack tail); timed re-notification
   is not implemented.
 - No APNs/FCM push yet; no Live Activities yet (Phase 3).
+  (Live Activities, in progress: `LiveActivitiesService`
+  (`mobile/lib/services/live_activities.dart`) mirrors the waiting stack
+  over MethodChannel `dev.agentdesk/live_activities` to
+  `LiveActivityManager` (`mobile/ios/Runner/`), rendered by the
+  `LiveActivityWidget` extension (`mobile/ios/LiveActivityWidget/`,
+  wired per its `SETUP.md` on a macOS/Xcode host — Swift not compiled
+  on Linux). `TaskRepository.notifyListeners` is the single sync hook;
+  the service dedupes unchanged states and no-ops off iOS.)

@@ -1,8 +1,9 @@
 /* Inspect sheet (§3.3): full card + dynamic A2UI form (docs/protocol.md). */
-import { el, clear } from './dom.js';
+import { el, clear, toast } from './dom.js';
 import { state } from './store.js';
 import { renderComponent, orderedComponents } from './render.js';
 import { triage, approvalData } from './actions.js';
+import { renderAudioField, renderImageField, uploadHolder } from './capture.js';
 
 export function openInspect(task) {
   state.inspectTask = task;
@@ -110,6 +111,21 @@ export function renderInspect() {
         inputs.set(comp.id, () => input.value);
         break;
       }
+      case 'AudioCapture': {
+        // I-1001: getUserMedia + MediaRecorder; submit uploads via
+        // POST /api/v1/attachments and stores { attachmentId, kind,
+        // contentType } in the form data. Text fallback included.
+        const { node, read } = renderAudioField(p);
+        field.appendChild(node);
+        inputs.set(comp.id, read);
+        break;
+      }
+      case 'ImageCapture': {
+        const { node, read } = renderImageField(p);
+        field.appendChild(node);
+        inputs.set(comp.id, read);
+        break;
+      }
       default: {
         // FR-1.3 fallback inside the form too.
         const f = el('div', 'fallback');
@@ -124,11 +140,26 @@ export function renderInspect() {
   const row = el('div', 'sheet-actions');
   const submit = el('button', 'btn primary', '修正して承認');
   submit.type = 'button';
-  submit.addEventListener('click', () => {
+  submit.addEventListener('click', async () => {
+    submit.disabled = true;
     const values = {};
     for (const [id, getter] of inputs) {
       const v = getter();
       if (v !== undefined && v !== null && v !== '') values[id] = v;
+    }
+    // I-1001: media holders upload first — the hub value is
+    // { attachmentId, kind, contentType }; a failed upload keeps the
+    // card open with a toast instead of losing the decision.
+    for (const [id, v] of Object.entries(values)) {
+      if (v && typeof v === 'object' && v.blob instanceof Blob && typeof v.kind === 'string') {
+        try {
+          values[id] = await uploadHolder(v);
+        } catch {
+          submit.disabled = false;
+          toast('添付のアップロードに失敗しました');
+          return;
+        }
+      }
     }
     // Form values ride on top; row-select / editable extras join via approvalData.
     closeInspect();

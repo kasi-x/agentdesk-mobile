@@ -8,6 +8,7 @@ import '../config.dart';
 import '../models/task_card.dart';
 import '../models/triage_action.dart';
 import 'hub_api.dart';
+import 'live_activities.dart';
 import 'priority.dart';
 import 'sse_client.dart';
 
@@ -126,6 +127,48 @@ class TaskRepository extends ChangeNotifier {
 
   String? _lastToast;
   int _toastSeq = 0;
+  /// Every stack funnel (`_reconcile`, `upsert`, `remove`,
+  /// `_hideForSnooze`, `_restore`, local `snooze`/`bringToTop`, order and
+  /// quiet-hours changes) ends in [notifyListeners], so this single hook
+  /// mirrors all of them. Tray-only notifies (history, toasts, approval
+  /// progress) are absorbed by [LiveActivitiesService]'s dedupe — no
+  /// platform call unless count/top actually changed.
+  @override
+  void notifyListeners() {
+    _syncLiveActivity();
+    super.notifyListeners();
+  }
+
+  /// iOS Live Activity mirror (Phase 3): "N agents waiting — top: <title>".
+  /// Lazily instantiated so tests and non-iOS devices never allocate a
+  /// platform channel; every push is fire-and-forget and deduped inside
+  /// [LiveActivitiesService], so stack mutations never block on it.
+  LiveActivitiesService? _liveActivities;
+  LiveActivitiesService get _live {
+    final existing = _liveActivities;
+    if (existing != null) return existing;
+    final created = LiveActivitiesService();
+    _liveActivities = created;
+    return created;
+  }
+
+  /// Waiting-stack mirror: start/update while cards remain, end at zero.
+  /// Uses [visibleStack] so quiet-hours-parked cards match what the user
+  /// sees; head of the post-restack ordering is the visible top card.
+  void _syncLiveActivity() {
+    final cards = visibleStack;
+    if (cards.isEmpty) {
+      unawaited(_live.end());
+      return;
+    }
+    final top = cards.first;
+    unawaited(_live.update(
+      pendingCount: cards.length,
+      topTitle: top.summary,
+      topAgent: top.agent.name,
+    ));
+  }
+
   TaskRepository({required HubConfig config, HubApi? api})
       : _config = config,
         api = api ?? HttpHubApi(config: config);
@@ -452,6 +495,7 @@ class TaskRepository extends ChangeNotifier {
     required String actionName,
     Map<String, dynamic>? data,
     required String source,
+    bool learnRule = false,
   }) async {
     // Snapshot row selections/edits BEFORE remove() — remove clears them.
     final extras = (data?.containsKey('reason') ?? false) ||
@@ -479,6 +523,7 @@ class TaskRepository extends ChangeNotifier {
       timestamp: DateTime.now().toUtc(),
       source: source,
       data: merged,
+      learnRule: learnRule,
     );
     final result = await _deliver(reply);
     if (result == ActionSendResult.sent) {

@@ -28,6 +28,8 @@ const SHELL = [
   '/settings.js',
   '/stamp.js',
   '/qr.js',
+  '/capture.js',
+  '/guardrails.js',
 ];
 
 self.addEventListener('install', (event) => {

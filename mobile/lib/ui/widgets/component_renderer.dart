@@ -60,9 +60,42 @@ class ComponentRenderer extends StatelessWidget {
           onRowToggle: onRowToggle,
         ),
       'Chips' => _chips(context),
+      // Capture components (I-1001) can also appear on the card body:
+      // show a compact read-only tile. The interactive recorder/picker
+      // lives in the inspect sheet; unknown kinds keep the text
+      // fallback below (FR-1.3).
+      'AudioCapture' || 'AudioInput' => _captureTile(
+          context, Icons.mic_none, '音声メモ',
+          '${component.properties['label'] ?? component.id}'),
+      'ImageCapture' || 'ImagePicker' => _captureTile(
+          context, Icons.photo_outlined, '写真',
+          '${component.properties['label'] ?? component.id}'),
       _ => _fallback(context),
     };
     return _maybeEditable(component, rendered);
+  }
+
+  Widget _captureTile(
+      BuildContext context, IconData icon, String kind, String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: PopColors.surface2,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: PopColors.text2),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              '$label（詳細から追加）',
+              style: const TextStyle(fontSize: 12, color: PopColors.text2),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   /// The component named by `task.editable` shows its inline editor

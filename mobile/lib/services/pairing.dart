@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
@@ -77,8 +76,6 @@ Future<PairingOutcome> redeemPairing({
     );
   } on TimeoutException {
     return PairingOutcome(hubUrl: hubUrl, error: '接続がタイムアウトしました');
-  } on SocketException {
-    return PairingOutcome(hubUrl: hubUrl, error: 'ハブに接続できません');
   } on http.ClientException {
     return PairingOutcome(hubUrl: hubUrl, error: 'ハブに接続できません');
   } on FormatException {

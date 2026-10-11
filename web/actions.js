@@ -136,8 +136,9 @@ export function approvalData(task, extra) {
 }
 
 /** Approve one card with its collected extras (Shift+→ adds automation).
+ * `learnRule: true` (two-stage, I-1003) rides top-level on the action POST.
  * Returns false when the rubber-stamp gate armed instead of sending. */
-export function approve(task, { source = 'web_ui', extra = null } = {}) {
+export function approve(task, { source = 'web_ui', extra = null, learnRule = false } = {}) {
   if (!passGate(task)) {
     toast('もう一度で承認 (連続承認検知中)');
     return false;
@@ -147,6 +148,7 @@ export function approve(task, { source = 'web_ui', extra = null } = {}) {
     actionName: (right && right.actionName) || 'approve',
     data: approvalData(task, extra),
     source,
+    learnRule,
   });
   return true;
 }
@@ -350,7 +352,7 @@ function verdictOf(task, actionName) {
   return 'other';
 }
 
-export function triage(task, { actionName, data, source }) {
+export function triage(task, { actionName, data, source, learnRule = false }) {
   const risk = riskLevel(task);
   removeFromStack(task.taskId);
   rememberUndoable(task);
@@ -373,6 +375,8 @@ export function triage(task, { actionName, data, source }) {
     recordStamp();
   }
   render();
+  // Executive Desk (I-1003): two-stage approves carry the learn semantic
+  // as a top-level flag — the hub creates an auto rule from the card.
   const reply = {
     taskId: task.taskId,
     nonce: task.nonce,
@@ -380,6 +384,7 @@ export function triage(task, { actionName, data, source }) {
     source,
     data: data || {},
   };
+  if (learnRule) reply.learnRule = true;
   deliver(reply, task);
 }
 

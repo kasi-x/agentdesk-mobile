@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
@@ -44,8 +43,16 @@ class BulkResult {
 /// approves matches with `source: "auto_rule"` against the rule's lease.
 class AutoApprovalRule {
   final String id;
-  /// Action to take on match: 'approve' | 'reject' (default: 'approve')
+
+  /// approve | reject — what a match does (I-1002, default approve).
+  /// Parsed tolerantly: anything but `reject` reads as approve so old
+  /// hubs (no `action` key) keep working.
   final String action;
+
+  /// manual | learned — display-only origin mark (`learned` = created by
+  /// a swipe via `learnRule: true`, I-1003). Absent on old hubs; never
+  /// used in match logic.
+  final String? source;
 
   /// Substring of `agent.name`; null = any agent.
   final String? agent;
@@ -55,6 +62,9 @@ class AutoApprovalRule {
 
   /// Maximum `impact.cost.amount`; null = any.
   final double? maxCost;
+
+  /// Minimum card confidence 0–1; null = any (I-1002).
+  final double? minConfidence;
 
   /// Substring of `groupKey`; null = any.
   final String? groupKey;
@@ -73,15 +83,14 @@ P_T_S:
 
   final bool enabled;
 
-  /// Minimum `confidence` score (0.0-1.0); null = any.
-  final double? minConfidence;
-
   const AutoApprovalRule({
     required this.id,
     this.action = 'approve',
+    this.source,
     this.agent,
-    this.minConfidence,
     this.severity = const <String>[],
+    this.maxCost,
+    this.minConfidence,
     this.groupKey,
     this.maxCost,
     this.leaseUntil,
@@ -104,15 +113,21 @@ P_T_S:
         : null;
     final severityRaw = match['severity'];
     final maxCostRaw = match['maxCost'];
+    final minConfRaw = match['minConfidence'];
     final maxCountRaw = lease?['maxCount'];
+    final actionRaw = raw['action'];
+    final sourceRaw = raw['source'];
     return AutoApprovalRule(
       id: '${raw['id'] ?? ''}',
-      action: raw['action'] is String ? raw['action'] as String : 'approve',
+      action: actionRaw == 'reject' ? 'reject' : 'approve',
+      source: sourceRaw is String ? sourceRaw : null,
       agent: match['agent'] is String ? match['agent'] : null,
       severity:
           severityRaw is List ? severityRaw.whereType<String>().toList() : const <String>[],
       maxCost: maxCostRaw is num ? maxCostRaw.toDouble() : null,
-      minConfidence: match['minConfidence'] is num ? (match['minConfidence'] as num).toDouble() : null,
+      minConfidence: minConfRaw is num
+          ? minConfRaw.toDouble().clamp(0.0, 1.0)
+          : null,
       groupKey: match['groupKey'] is String ? match['groupKey'] as String : null,
       leaseUntil: lease?['until'] is String ? lease!['until'] : null,
       leaseMaxCount: maxCountRaw is num ? maxCountRaw.toInt() : null,
@@ -122,6 +137,7 @@ P_T_S:
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         'id': id,
+        'action': action,
         'match': <String, dynamic>{
           if (agent != null) 'agent': agent,
           if (severity.isNotEmpty) 'severity': severity,
@@ -129,7 +145,7 @@ P_T_S:
           if (minConfidence != null) 'minConfidence': minConfidence,
           if (groupKey != null) 'groupKey': groupKey,
         },
-        'action': action,
+        if (source != null) 'source': source,
         if (leaseUntil != null || leaseMaxCount != null)
           'lease': <String, dynamic>{
             if (leaseUntil != null) 'until': leaseUntil,
@@ -138,16 +154,38 @@ P_T_S:
         'enabled': enabled,
       };
 
-  AutoApprovalRule copyWith({bool? enabled}) => AutoApprovalRule(
+  AutoApprovalRule copyWith({
+    String? action,
+    String? source,
+    String? agent,
+    List<String>? severity,
+    double? maxCost,
+    double? minConfidence,
+    String? groupKey,
+    String? leaseUntil,
+    int? leaseMaxCount,
+    bool? enabled,
+    bool clearAgent = false,
+    bool clearMaxCost = false,
+    bool clearMinConfidence = false,
+    bool clearGroupKey = false,
+    bool clearLeaseUntil = false,
+    bool clearLeaseMaxCount = false,
+    bool clearSource = false,
+  }) =>
+      AutoApprovalRule(
         id: id,
-        action: action,
-        agent: agent,
-        severity: severity,
-        maxCost: maxCost,
-        minConfidence: minConfidence,
-        groupKey: groupKey,
-        leaseUntil: leaseUntil,
-        leaseMaxCount: leaseMaxCount,
+        action: action ?? this.action,
+        source: clearSource ? null : (source ?? this.source),
+        agent: clearAgent ? null : (agent ?? this.agent),
+        severity: severity ?? this.severity,
+        maxCost: clearMaxCost ? null : (maxCost ?? this.maxCost),
+        minConfidence:
+            clearMinConfidence ? null : (minConfidence ?? this.minConfidence),
+        groupKey: clearGroupKey ? null : (groupKey ?? this.groupKey),
+        leaseUntil: clearLeaseUntil ? null : (leaseUntil ?? this.leaseUntil),
+        leaseMaxCount:
+            clearLeaseMaxCount ? null : (leaseMaxCount ?? this.leaseMaxCount),
         enabled: enabled ?? this.enabled,
       );
 }
@@ -161,10 +199,69 @@ abstract class HubRulesApi {
 
   /// Replaces the whole rule set; false when the save did not reach the hub.
   Future<bool> saveRules(List<AutoApprovalRule> rules);
+}
 
-  /// Preview traffic distribution for a rule set (I-1002).
-  /// Returns null if simulation fails.
-  Future<Map<String, dynamic>?> simulateRules(List<AutoApprovalRule> rules);
+/// One dry-run count from `POST /api/v1/rules/simulate` (I-1002):
+/// `{sampleSize, autoApprove, autoReject, hitl}`. All counts ≥ 0 and
+/// `autoApprove + autoReject + hitl ≤ sampleSize` on a well-formed hub.
+class SimulateResult {
+  final int sampleSize;
+  final int autoApprove;
+  final int autoReject;
+  final int hitl;
+
+  const SimulateResult({
+    required this.sampleSize,
+    required this.autoApprove,
+    required this.autoReject,
+    required this.hitl,
+  });
+
+  factory SimulateResult.fromJson(Map<String, dynamic> raw) {
+    int count(Object? v) => v is num ? v.toInt().clamp(0, 1 << 30) : 0;
+    return SimulateResult(
+      sampleSize: count(raw['sampleSize']),
+      autoApprove: count(raw['autoApprove']),
+      autoReject: count(raw['autoReject']),
+      hitl: count(raw['hitl']),
+    );
+  }
+}
+
+/// Uploaded blob reference (I-1001): `POST /api/v1/attachments`
+/// `{kind, contentType, dataBase64}` → `{id, url}`.
+class AttachmentRef {
+  final String id;
+  final String url;
+
+  const AttachmentRef({required this.id, required this.url});
+
+  factory AttachmentRef.fromJson(Map<String, dynamic> raw) =>
+      AttachmentRef(id: '${raw['id'] ?? ''}', url: '${raw['url'] ?? ''}');
+}
+
+/// Executive Desk server surface (I-1001/I-1002): rule dry-run plus
+/// attachment upload. Kept separate from [HubApi]/[HubRulesApi] so
+/// existing fakes stay source-compatible; callers probe with
+/// `api is HubGuardrailsApi` and hide the preview / fail the upload
+/// gracefully when absent. Old hubs (404 on these routes) surface as
+/// null/false — never a crash.
+abstract class HubGuardrailsApi {
+  /// Dry-runs `match`+`action` on top of the stored rules over the hub's
+  /// recent-card sample. Both null = dry-run the current set.
+  /// Returns null when unsupported or unreachable (old hub / offline).
+  Future<SimulateResult?> simulateRules({
+    Map<String, dynamic>? match,
+    String? action,
+  });
+
+  /// Uploads one audio/image blob. Null bytes/invalid args return null;
+  /// network or hub errors return null (callers keep the field empty).
+  Future<AttachmentRef?> uploadAttachment({
+    required String kind,
+    required String contentType,
+    required String dataBase64,
+  });
 }
 
 /// Wave-2 server surface: server-side snooze, delegation and bulk triage
@@ -192,7 +289,7 @@ abstract class HubApiV2 {
   Future<BulkResult> bulk(List<TriageActionReply> actions);
 }
 
-class HttpHubApi implements HubApi, HubApiV2, HubRulesApi {
+class HttpHubApi implements HubApi, HubApiV2, HubRulesApi, HubGuardrailsApi {
   final HubConfig config;
   final http.Client _client;
 
@@ -234,8 +331,6 @@ class HttpHubApi implements HubApi, HubApiV2, HubRulesApi {
       return ActionSendResult.rejected;
     } on TimeoutException {
       return ActionSendResult.networkError;
-    } on SocketException {
-      return ActionSendResult.networkError;
     } on http.ClientException {
       return ActionSendResult.networkError;
     }
@@ -260,8 +355,6 @@ class HttpHubApi implements HubApi, HubApiV2, HubRulesApi {
       }
       return UndoResult.rejected;
     } on TimeoutException {
-      return UndoResult.networkError;
-    } on SocketException {
       return UndoResult.networkError;
     } on http.ClientException {
       return UndoResult.networkError;
@@ -291,8 +384,6 @@ class HttpHubApi implements HubApi, HubApiV2, HubRulesApi {
       if (res.statusCode == 409) return ActionSendResult.conflict;
       return ActionSendResult.rejected;
     } on TimeoutException {
-      return ActionSendResult.networkError;
-    } on SocketException {
       return ActionSendResult.networkError;
     } on http.ClientException {
       return ActionSendResult.networkError;
@@ -324,8 +415,6 @@ class HttpHubApi implements HubApi, HubApiV2, HubRulesApi {
       return ActionSendResult.rejected;
     } on TimeoutException {
       return ActionSendResult.networkError;
-    } on SocketException {
-      return ActionSendResult.networkError;
     } on http.ClientException {
       return ActionSendResult.networkError;
     }
@@ -347,6 +436,7 @@ class HttpHubApi implements HubApi, HubApiV2, HubRulesApi {
                     'action': reply.actionName,
                     'source': reply.source,
                     if (reply.data.isNotEmpty) 'data': reply.data,
+                    if (reply.learnRule) 'learnRule': true,
                   },
               ],
             }),
@@ -369,8 +459,6 @@ class HttpHubApi implements HubApi, HubApiV2, HubRulesApi {
         ],
       );
     } on TimeoutException {
-      return const BulkResult(networkError: true);
-    } on SocketException {
       return const BulkResult(networkError: true);
     } on http.ClientException {
       return const BulkResult(networkError: true);
@@ -413,27 +501,87 @@ class HttpHubApi implements HubApi, HubApiV2, HubRulesApi {
       return false;
     }
   }
-
   @override
-  Future<Map<String, dynamic>?> simulateRules(List<AutoApprovalRule> rules) async {
+  Future<SimulateResult?> simulateRules({
+    Map<String, dynamic>? match,
+    String? action,
+  }) async {
     try {
       final res = await _client
           .post(
             _uri('/rules/simulate'),
             headers: _headers,
             body: jsonEncode(<String, dynamic>{
-              'rules': [for (final rule in rules) rule.toJson()],
+              if (match != null) 'match': match,
+              if (action != null) 'action': action,
             }),
           )
           .timeout(const Duration(seconds: 10));
       if (res.statusCode != 200) return null;
-      final body = jsonDecode(res.body);
-      if (body is Map<String, dynamic>) {
-        return body;
-      }
-      return null;
+      final body = jsonDecode(utf8.decode(res.bodyBytes));
+      if (body is! Map) return null;
+      return SimulateResult.fromJson(Map<String, dynamic>.from(body));
     } on Exception {
       return null;
+    }
+  }
+
+  @override
+  Future<AttachmentRef?> uploadAttachment({
+    required String kind,
+    required String contentType,
+    required String dataBase64,
+  }) async {
+    if (kind != 'audio' && kind != 'image') return null;
+    if (contentType.isEmpty || dataBase64.isEmpty) return null;
+    try {
+      final res = await _client
+          .post(
+            _uri('/attachments'),
+            headers: _headers,
+            body: jsonEncode(<String, dynamic>{
+              'kind': kind,
+              'contentType': contentType,
+              'dataBase64': dataBase64,
+            }),
+          )
+          .timeout(const Duration(seconds: 30));
+      if (res.statusCode != 200 && res.statusCode != 201) return null;
+      final body = jsonDecode(utf8.decode(res.bodyBytes));
+      if (body is! Map) return null;
+      final ref = AttachmentRef.fromJson(Map<String, dynamic>.from(body));
+      if (ref.id.isEmpty) return null;
+      return ref;
+    } on Exception {
+      return null;
+    }
+  }
+
+
+  /// Native push registration (APNs/FCM): `POST /api/v1/push/native`
+  /// `{platform: "apns"|"fcm", token}`. True on 200/201, false otherwise
+  /// (offline / hub error). No `dart:io` — same http client + error style
+  /// as the rest of this class.
+  Future<bool> registerNativePush({
+    required String platform,
+    required String token,
+  }) async {
+    try {
+      final res = await _client
+          .post(
+            _uri('/push/native'),
+            headers: _headers,
+            body: jsonEncode(<String, String>{
+              'platform': platform,
+              'token': token,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+      return res.statusCode == 200 || res.statusCode == 201;
+    } on TimeoutException {
+      return false;
+    } on http.ClientException {
+      return false;
     }
   }
 }

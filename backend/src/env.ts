@@ -22,4 +22,19 @@ export interface Env {
   VAPID_PRIVATE_KEY?: string;
   /** VAPID `sub` claim; defaults to "mailto:admin@localhost". */
   VAPID_SUBJECT?: string;
+  /** Native push via APNs (I-701 follow-up). All optional: when any of
+   *  the four is unset the hub stores APNs registrations but skips APNs
+   *  delivery silently. `APNS_PRIVATE_KEY` is the P-256 .p8 key (PEM or
+   *  base64/DER); `APNS_SANDBOX` ("1"/"true") selects the sandbox host. */
+  APNS_KEY_ID?: string;
+  APNS_TEAM_ID?: string;
+  APNS_PRIVATE_KEY?: string;
+  APNS_BUNDLE_ID?: string;
+  APNS_SANDBOX?: string;
+  /** Native push via FCM v1 (I-701 follow-up). Same skip-when-unset
+   *  pattern; `FCM_PRIVATE_KEY` is the service-account RSA key (PEM or
+   *  base64/DER; literal "\n" escapes tolerated). */
+  FCM_PROJECT_ID?: string;
+  FCM_CLIENT_EMAIL?: string;
+  FCM_PRIVATE_KEY?: string;
 }

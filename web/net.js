@@ -132,6 +132,55 @@ export async function postPushSub(sub) {
   return true;
 }
 
+/* ---------------- Executive Desk (I-1001/I-1002) ---------------- */
+
+/** Fetch auto-approval rules (I-1002). Returns the rule array, or
+ *  'unsupported' when the hub predates GET /api/v1/rules (404) — callers
+ *  degrade like `api is HubRulesApi` does on mobile. Throws on network/5xx. */
+export async function fetchRules() {
+  const res = await fetch(apiUrl('/api/v1/rules'), { headers: authHeaders() });
+  if (res.status === 404) return 'unsupported';
+  if (!res.ok) throw new Error(`rules ${res.status}`);
+  const data = await res.json();
+  return Array.isArray(data.rules) ? data.rules : [];
+}
+
+/** Replace the whole rule set (I-1002). Returns 'ok' | 'unsupported' | throws. */
+export async function saveRules(rules) {
+  const res = await fetch(apiUrl('/api/v1/rules'), {
+    method: 'PUT',
+    headers: authHeaders(),
+    body: JSON.stringify({ rules }),
+  });
+  if (res.ok) return 'ok';
+  if (res.status === 404) return 'unsupported';
+  throw new Error(`rules ${res.status}`);
+}
+
+/** Simulate a rule draft (I-1002). Returns { sampleSize, autoApprove,
+ *  autoReject, hitl }, or 'unsupported' when the hub predates the endpoint. */
+export async function simulateRule(match, action) {
+  const res = await fetch(apiUrl('/api/v1/rules/simulate'), {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ match, action }),
+  });
+  if (res.status === 404) return 'unsupported';
+  if (!res.ok) throw new Error(`simulate ${res.status}`);
+  return res.json();
+}
+
+/** Upload one attachment (I-1001). Returns the hub payload ({ id, url }). */
+export async function postAttachment({ kind, contentType, dataBase64 }) {
+  const res = await fetch(apiUrl('/api/v1/attachments'), {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ kind, contentType, dataBase64 }),
+  });
+  if (!res.ok) throw new Error(`attachment ${res.status}`);
+  return res.json();
+}
+
 /* ---------------- SSE ---------------- */
 
 /** Map a dismissTask `by` value to a history source (I-512). */

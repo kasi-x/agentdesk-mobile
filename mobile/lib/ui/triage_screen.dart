@@ -10,6 +10,7 @@ import '../models/task_card.dart';
 import '../models/triage_action.dart';
 import '../services/priority.dart';
 import '../services/task_repository.dart';
+import 'guardrails_screen.dart';
 import 'inspect_sheet.dart';
 import 'colors.dart';
 import 'settings_screen.dart';
@@ -137,15 +138,20 @@ class _TriageScreenState extends State<TriageScreen> {
     required String actionName,
     Map<String, dynamic>? data,
     required String source,
+    bool learnRule = false,
   }) {
     if (task.severity == 'critical') {
       HapticFeedback.heavyImpact();
     } else {
       HapticFeedback.mediumImpact();
     }
-    context
-        .read<TaskRepository>()
-        .triage(task, actionName: actionName, data: data, source: source);
+    context.read<TaskRepository>().triage(
+          task,
+          actionName: actionName,
+          data: data,
+          source: source,
+          learnRule: learnRule,
+        );
   }
 
   /// Hand the card to a colleague (I-501): name prompt → POST delegate.
@@ -292,6 +298,15 @@ class _TriageScreenState extends State<TriageScreen> {
             onPressed: entries.isEmpty
                 ? null
                 : () => setState(() => _overview = true),
+          ),
+          IconButton(
+            icon: const Icon(Icons.shield_outlined),
+            tooltip: 'ガードレール',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const GuardrailsScreen(),
+              ),
+            ),
           ),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
@@ -882,7 +897,7 @@ class _TriageScreenState extends State<TriageScreen> {
       final propose = secondStage == 'right';
       final data = <String, dynamic>{
         ...?binding?.payload,
-        if (propose) 'autoAllow': true,
+        if (propose) 'proposeAutomation': true,
       };
       _recordApproval(task);
       if (wasStamped) _resetStamp();
@@ -890,7 +905,12 @@ class _TriageScreenState extends State<TriageScreen> {
         task,
         actionName: binding?.actionName ?? 'approve',
         data: data,
-        source: propose ? ActionSource.twoStageSwipe : ActionSource.swipeGesture,
+        source:
+            propose ? ActionSource.twoStageSwipe : ActionSource.swipeGesture,
+        // Deep (two-stage) right swipe = approve + automate (I-1003):
+        // keep the legacy `proposeAutomation` data flag for old hubs and
+        // additionally ask new hubs to learn a rule from this swipe.
+        learnRule: propose,
       );
     } else if (direction == CardSwiperDirection.left) {
       _resetStamp();

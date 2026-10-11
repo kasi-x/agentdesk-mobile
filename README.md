@@ -20,6 +20,7 @@ Docs: [requirements.ja.md](docs/requirements.ja.md) (原案) ·
 [architecture.md](docs/architecture.md) ·
 [philosophy.md](docs/philosophy.md) (全体原則) ·
 [design-philosophy.md](docs/design-philosophy.md) (UI設計原則) ·
+[product-strategy-review.md](docs/product-strategy-review.md) (戦略レビュー) ·
 [IDEA.md](IDEA.md) (アイデア置き場) · [TODO.md](TODO.md) (実行計画).
 
 ## Quickstart (local E2E, 3 terminals)

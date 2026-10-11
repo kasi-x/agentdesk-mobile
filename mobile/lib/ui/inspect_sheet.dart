@@ -1,10 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../models/task_card.dart';
+import '../services/attachments.dart';
+import '../services/hub_api.dart';
+import '../services/task_repository.dart';
 import 'colors.dart';
 import 'package:genui/genui.dart' show Surface;
 
-import '../models/task_card.dart';
 import 'genui_form.dart';
+import 'widgets/capture_fields.dart';
 import 'widgets/component_renderer.dart';
 
 /// Inspect & Modify (spec §3.3): bottom sheet with the card body plus a
@@ -44,6 +49,7 @@ class _InspectSheet extends StatefulWidget {
 
 class _InspectSheetState extends State<_InspectSheet> {
   final Map<String, dynamic> _values = <String, dynamic>{};
+  final Map<String, AttachmentValue> _attachments = <String, AttachmentValue>{};
   final Map<String, TextEditingController> _textControllers =
       <String, TextEditingController>{};
   late final GenUiFormAdapter _genui;
@@ -80,12 +86,24 @@ class _InspectSheetState extends State<_InspectSheet> {
       }
     }
     // genui-rendered fields contribute their data-model values; hand-rolled
-    // state is already in `_values`. Form values win over the payload.
+    // state is already in `_values`. Uploaded attachments join as
+    // `{attachmentId, kind, contentType}` references (I-1001). Form values
+    // win over the payload.
     _values.addAll(_genui.collectValues());
+    for (final entry in _attachments.entries) {
+      _values[entry.key] = entry.value.toJson();
+    }
     final base = widget.task.onSwipeRight?.payload ?? const <String, dynamic>{};
     final data = <String, dynamic>{...base, ..._values};
     Navigator.of(context).pop();
     widget.onApprove(data);
+  }
+
+  /// Upload surface when the hub supports attachments (I-1001); null on
+  /// old hubs so capture fields render local-only and submit omits them.
+  HubGuardrailsApi? get _uploader {
+    final api = context.read<TaskRepository>().api;
+    return api is HubGuardrailsApi ? api as HubGuardrailsApi : null;
   }
 
   @override
@@ -205,42 +223,68 @@ class _InspectSheetState extends State<_InspectSheet> {
         return _segmented(c);
       case 'TextField':
         return _textField(c);
+      case 'AudioCapture':
       case 'AudioInput':
-        return _audioInput(c);
+        return _audioCapture(c);
+      case 'ImageCapture':
       case 'ImagePicker':
-        return _imagePicker(c);
+        return _imageCapture(c);
       default:
         return _unsupportedForm(c);
     }
   }
 
-  Widget _audioInput(CardComponent c) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(c.properties['label'] ?? c.id, style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        ElevatedButton.icon(
-          onPressed: () {},
-          icon: const Icon(Icons.mic),
-          label: const Text('録音を開始'),
-        ),
-      ],
+  /// Voice memo field (I-1001). Desktop builds without a mic backend
+  /// render the field's disabled state via the capture widget itself;
+  /// web goes through the record_web blob path.
+  Widget _audioCapture(CardComponent c) {
+    return AudioCaptureField(
+      componentId: c.id,
+      label: '${c.properties['label'] ?? c.id}',
+      value: _attachments[c.id],
+      uploader: _uploader,
+      onChanged: (AttachmentValue? v) => setState(() {
+        if (v == null) {
+          _attachments.remove(c.id);
+          _values.remove(c.id);
+        } else if (v.attachmentId.isNotEmpty) {
+          _attachments[c.id] = v;
+        } else {
+          // Local-only clip (old hub / failed upload): replayable, but
+          // submit omits it — never a dangling reference.
+          _attachments.remove(c.id);
+          _values.remove(c.id);
+        }
+      }),
     );
   }
 
-  Widget _imagePicker(CardComponent c) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(c.properties['label'] ?? c.id, style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        ElevatedButton.icon(
-          onPressed: () {},
-          icon: const Icon(Icons.photo_library),
-          label: const Text('画像を選択'),
-        ),
-      ],
+  /// Photo field (I-1001): camera/gallery pick with a thumbnail.
+  /// `allowCamera`/`allowGallery` default true; kIsWeb needs no
+  /// manifest/plist entries.
+  Widget _imageCapture(CardComponent c) {
+    return ImageCaptureField(
+      componentId: c.id,
+      label: '${c.properties['label'] ?? c.id}',
+      value: _attachments[c.id],
+      uploader: _uploader,
+      allowCamera: c.properties['allowCamera'] is bool
+          ? c.properties['allowCamera'] as bool
+          : true,
+      allowGallery: c.properties['allowGallery'] is bool
+          ? c.properties['allowGallery'] as bool
+          : true,
+      onChanged: (AttachmentValue? v) => setState(() {
+        if (v == null) {
+          _attachments.remove(c.id);
+          _values.remove(c.id);
+        } else if (v.attachmentId.isNotEmpty) {
+          _attachments[c.id] = v;
+        } else {
+          _attachments.remove(c.id);
+          _values.remove(c.id);
+        }
+      }),
     );
   }
 

@@ -12,7 +12,9 @@ working unchanged. The `snapshot` event and `GET /state` envelope also
 carry `protocolVersion` so a client can detect a server it does not
 understand. Additive fields (`groupKey`, `decisionKind`, `editable`,
 `priority`, `revised`, `requiredApprovals`, `choices`, `delegatedTo`,
-`actions.onSwipeDown`, `paused`, `rules`, `approvalProgress`) do not bump
+`actions.onSwipeDown`, `paused`, `rules`, `approvalProgress`,
+`Rule.action`, `Rule.source`, `RuleMatch.minConfidence`,
+`ActionReply.learnRule`) do not bump
 the version; clients must tolerate unknown ones.
 
 Payloads are **pure data** (A2UI-style, flat adjacent list). Clients must
@@ -35,12 +37,15 @@ treat every string as display-only text: no HTML, no JS, no WebView
 | POST | `/api/v1/actions/undo` | Bearer `$CLIENT_TOKEN` | client | revert a decision still inside the undo grace window (I-104) |
 | POST | `/api/v1/pause` | Bearer `$CLIENT_TOKEN` | client | pause the fleet (I-403) |
 | POST | `/api/v1/resume` | Bearer `$CLIENT_TOKEN` | client | resume the fleet (I-403) |
-| GET/PUT | `/api/v1/rules` | Bearer `$CLIENT_TOKEN` | client | read / replace auto-approval rules (I-304/I-807) |
-| POST | `/api/v1/rules/simulate` | Bearer `$CLIENT_TOKEN` | client | preview funnel traffic for a given rule set (I-1002) |
+| GET/PUT | `/api/v1/rules` | Bearer `$CLIENT_TOKEN` | client | read / replace auto-approval/-rejection rules (I-304/I-807/I-1002) |
 | POST | `/api/v1/pair` | Bearer `$CLIENT_TOKEN` | client | mint a one-time pairing code (I-808) |
 | POST | `/api/v1/pair/redeem` | none (the code is the credential) | client | redeem a code into a device token (I-808) |
 | POST/DELETE | `/api/v1/push/subscribe` | Bearer `$CLIENT_TOKEN` | client | register / remove a Web Push subscription (I-701) |
 | GET | `/api/v1/push/vapid` | Bearer `$CLIENT_TOKEN` | client | VAPID public key for subscriptions (I-701) |
+| POST/DELETE | `/api/v1/push/native` | Bearer `$CLIENT_TOKEN` | client | register / remove a native APNs/FCM token (I-701 follow-up) |
+| POST | `/api/v1/rules/simulate` | Bearer `$CLIENT_TOKEN` | client | dry-run rules (+ optional candidate) over recent cards (I-1002) |
+| POST | `/api/v1/attachments` | Bearer `$CLIENT_TOKEN` | client | upload a small audio/image blob (I-1001) |
+| GET | `/api/v1/attachments/{id}` | Bearer `$CLIENT_TOKEN` **or** `$AGENT_TOKEN` | client/agent | download the raw bytes (I-1001) |
 | GET | `/healthz` | none | ops | liveness |
 
 Client auth accepts the shared `$CLIENT_TOKEN` **or any issued device
@@ -198,8 +203,7 @@ the inspect sheet).
 
 Inspect-form catalog: `TimePicker`, `DatePicker`, `Slider`
 (`min`/`max`/`default`/`divisions`), `Segmented` (`options`),
-`TextField` (`label`, `multiline`), `AudioInput` (`label`, `maxDuration`),
-`ImagePicker` (`label`, `allowCamera`, `allowGallery`).
+`TextField` (`label`, `multiline`).
 
 On submit the sheet collects `{ componentId: value }` for every form
 component, merges the `onSwipeRight.payload` underneath, and sends
@@ -231,6 +235,8 @@ Hub semantics (FR-3.3): the first accepted action flips the task to
 A wrong nonce → `409 bad_nonce`. Unknown task → `404`. Accepted actions
 are broadcast as `dismissTask` to all connected devices and forwarded to
 `replyUrl` after the undo grace window closes.
+`learnRule: true` on an approve/reject also stores a `"learned"` rule
+(I-1003, see §自動承認ルール).
 
 ### 返信 `data` の素通し項目
 
@@ -532,6 +538,8 @@ body なし
 と提案できる（I-304）。ルールはハブが持ち、コードで管理する（I-807）。
 リース（I-602）はルールの自己制限 — 「このエージェントに今日だけ $50
 まで」の期限・上限・対象を指定し、範囲内のカードだけ自動承認する。
+ガードレール（I-1002）で `action: "reject"` の自動拒否ルールと
+`minConfidence` 下限も指定できる。
 
 ```
 GET /api/v1/rules    Authorization: Bearer $CLIENT_TOKEN
@@ -545,9 +553,11 @@ body = { "rules": [ Rule, … ] }
 ```json
 {
   "id": "cheap-calendar",
-  "match": { "agent": "Calendar", "severity": ["info", "warning"], "maxCost": 50 },
+  "match": { "agent": "Calendar", "severity": ["info", "warning"], "maxCost": 50, "minConfidence": 0.7 },
   "lease": { "until": "2026-10-06T00:00:00Z", "maxCount": 20 },
-  "enabled": true
+  "enabled": true,
+  "action": "approve",
+  "source": "manual"
 }
 ```
 
@@ -558,22 +568,52 @@ body = { "rules": [ Rule, … ] }
 | `match.severity` | 許容 severity 配列（空/省略 = すべて） |
 | `match.maxCost` | `impact.cost.amount` の上限。コストなしのカードは 0 として扱う |
 | `match.groupKey` | `groupKey` の部分一致 |
+| `match.minConfidence` | `confidence` の下限（0–1、`card.confidence >= value`）。confidence なしのカードは不適合 |
 | `lease.until` | ISO 8601。これを過ぎたらルールは発火しない |
 | `lease.maxCount` | 自動承認の上限回数。1 以上の整数 |
 | `enabled` | 真偽値。省略時は true |
+| `action` | `"approve"` / `"reject"`（省略時は `"approve"`）。自動拒否ルールは reject 側の binding を実行せず、そのまま `processed` にする |
+| `source` | `"manual"` / `"learned"`（任意・表示用）。`"learned"` はスワイプ学習（I-1003）で作られた印で、一致判定には使わない |
 
-- 不正なルール（`id` 欠落、`severity` が非配列、`maxCount` が 1 未満、
-  `until` が不正日付、`enabled` が非真偽値）は `400` ではじく —
+- 不正なルール（`id` 欠落、`severity` が非配列、`maxCost` が非数値、
+  `minConfidence` が 0–1 外、`action` が approve/reject 以外、`maxCount`
+  が 1 未満、`until` が不正日付、`enabled` が非真偽値）は `400` ではじく —
   自動承認の条件を黙って広げないため、緩い検証はしない。
 - **PUT はルール集合を丸ごと置換**する。新しいルールは保存以降に
   enqueue されるカードにだけ適用され、**待機中の backlog は掃き出さない**。
-- マッチした新規カードは即座に自動承認される（grace 0）:
-  `outcome {name: "approve", data: {byRule}, source: "auto_rule"}` を記録し、
+- マッチした新規カードは即座に自動決定される（grace 0）:
+  `outcome {name: <action>, data: {byRule}, source: "auto_rule"}` を記録し、
   `dismissTask {taskId, by: "auto_rule"}` を配信、`replyUrl` へ通常通り返送
   する（再試行つき）。`createTaskCard` は配信しない（スタックに載らない）。
+  enqueue 応答は `201 {ok, taskId, autoApproved: true, byRule}`（reject 時は
+  `autoApproved: false, autoRejected: true` を併せて返す）。
 - 発火ごとに `leaseUsed[ruleId]` を +1 し、`maxCount` に達したらそのルールは
   失効する。`until` 過ぎも失効。どちらも `ruleChanged` では通知しない
   （`GET /rules` で現在の集合を確認できる）。
+
+#### ルールのドライラン（I-1002）
+
+```
+POST /api/v1/rules/simulate    Authorization: Bearer $CLIENT_TOKEN
+body = {} または { "match": RuleMatch, "action": "approve" | "reject" }
+→ 200 {sampleSize, autoApprove, autoReject, hitl}
+```
+
+- ハブは直近に enqueue された約 100 件のメタデータ（agent 名、severity、
+  groupKey、cost、confidence、expiresAt）を保持し、保存済みルール（＋任意
+  の候補 `match`/`action`）にかけたら何件が自動承認・自動拒否・人間行きに
+  なるかを数える。候補なし = 現在の集合のドライラン。
+- 先勝ち（保存済みが候補より優先）、リース残量は無視（「何にマッチするか」
+  の問いなので）。状態は変えない。履歴は DO ストレージに永続化される。
+
+#### スワイプからの学習（I-1003）
+
+`POST /api/v1/actions` の通常 approve/reject に `learnRule: true` を添えると、
+コミット確定時にハブが `"learned"` ルールを1件追加する:
+`{action: 同じ決定, match: {agent: カードの agent 名, severity: [カードの
+severity], groupKey（あれば）}, enabled: true, source: "learned"}`。
+既存集合への追加（置換しない）、同一内容の重複は作らない。snooze /
+delegate / 部分承認では無視される。応答・配信は通常通り。
 
 ### ペアリングと端末トークン（I-808 / I-809）
 
@@ -631,17 +671,51 @@ GET    /api/v1/push/vapid        Authorization: Bearer $CLIENT_TOKEN
 - 送信先が `404` / `410` を返したら購読を削除する。その他の失敗は捨てる
   （再試行しない）。
 
-## Guardrails & Rules (I-1002)
+### ネイティブプッシュ APNs / FCM（I-701 follow-up）
 
-`GET /api/v1/rules` returns `[{ id, action, match, lease, enabled }]`.
-`PUT /api/v1/rules` replaces the entire list.
+新規カード時に Web Push と並行して送る。登録はいつでも保存し、プロバイダ
+秘密鍵が未設定の間は送信だけ黙ってスキップする（VAPID と同じ流儀）。
+詳しい鍵の取り方は [`docs/push.md`](push.md)。
 
-* `action`: `"approve" | "reject"` (optional, defaults to `"approve"`). `"reject"` automatically blocks the task instead of approving.
-* `match`: Constraints that MUST all be true (AND). Available matchers:
-  * `agent` (substring)
-  * `severity` (array of allowed strings)
-  * `groupKey` (substring)
-  * `maxCost` (number)
-  * `minConfidence` (number 0.0-1.0; card must be ≥ this value)
+```
+POST   /api/v1/push/native    Authorization: Bearer $CLIENT_TOKEN
+body = { "platform": "apns" | "fcm", "token": "…" }
+→ 201 {ok: true}
 
-`POST /api/v1/rules/simulate` takes `{ rules: [...] }` and returns `{ traffic: { autoApproved, hitl, rejected }, totalCount }` representing how those rules would evaluate against a recent task sample.
+DELETE /api/v1/push/native    Authorization: Bearer $CLIENT_TOKEN
+body = 同上（platform + token で特定）
+→ 204（body なし）
+```
+
+- `apns` の token は 64 文字 hex（それ以外は `400`）、`fcm` は空白なし
+  10–4096 文字（それ以外は `400`）。`platform` 不正も `400`。
+- トークンは認証スコープの DO に `nativepush:<sha256>` で保存する（平文は
+  保持しない）。Web Push 購読とは名前空間が別。
+- APNs: ES256 プロバイダ JWT（`kid` = `APNS_KEY_ID`、`iss` =
+  `APNS_TEAM_ID`）で `https://api.push.apple.com/3/device/<token>`（開発は
+  `APNS_SANDBOX=1` で sandbox ホスト）へ `apns-push-type: alert`、
+  `{aps: {alert: {title: "AgentDesk", body: summary}, sound: "default"},
+  taskId}`。`400` / `410` で登録を削除。
+- FCM v1: RS256 サービスアカウント JWT → OAuth 交換 →
+  `POST …/v1/projects/<id>/messages:send {message: {token, notification:
+  {title, body}, data: {taskId}}}`。`NOT_FOUND` / `UNREGISTERED` で削除。
+
+### 添付ファイル（I-1001）
+
+音声メモ・写真を action の `data` から参照するための小さな blob 置き場。
+クライアントは action `data` に `{<componentId>: {attachmentId, kind,
+contentType}}` を入れる（素通し — 追加検証なし）。
+
+```
+POST /api/v1/attachments    Authorization: Bearer $CLIENT_TOKEN
+body = { "kind": "audio" | "image", "contentType": "audio/m4a", "dataBase64": "…" }
+→ 201 {id: "att_…", url: "/api/v1/attachments/att_…"}
+
+GET  /api/v1/attachments/{id}    Authorization: Bearer $CLIENT_TOKEN または $AGENT_TOKEN
+→ 200 生バイト（Content-Type は登録時のもの）
+```
+
+- `kind` 不正・`contentType` 非 MIME・`dataBase64` 不正は `400`。デコード後
+  2 MiB 超は `413 too_large`。
+- ダウンロードはエージェントも取れる（action の `data` で id を受け取った
+  後の取得用）。未知 id は `404`。添付は認証スコープの DO に保存する。

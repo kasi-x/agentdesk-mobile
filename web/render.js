@@ -296,6 +296,32 @@ export function renderComponent(comp, task) {
       box.appendChild(wrap);
       return box;
     }
+    case 'AudioCapture': {
+      // I-1001 read-only tile: record/play/remove all happen inside the
+      // inspect form (capture.js); the card shows guidance only.
+      const p = comp.properties || {};
+      const tile = el('div', 'capture-tile');
+      tile.appendChild(el('div', 'capture-label', p.label || '音声'));
+      tile.appendChild(el('div', 'capture-hint', '詳細で添付できます'));
+      box.appendChild(tile);
+      return box;
+    }
+    case 'ImageCapture': {
+      const p = comp.properties || {};
+      const tile = el('div', 'capture-tile');
+      tile.appendChild(el('div', 'capture-label', p.label || '画像'));
+      if (typeof p.previewUrl === 'string' && /^https?:\/\//.test(p.previewUrl)) {
+        const img = el('img', 'capture-preview');
+        img.src = p.previewUrl;
+        img.alt = '';
+        img.referrerPolicy = 'no-referrer';
+        tile.appendChild(img);
+      } else {
+        tile.appendChild(el('div', 'capture-hint', '詳細で添付できます'));
+      }
+      box.appendChild(tile);
+      return box;
+    }
     default: {
       // FR-1.3 fallback card for unknown component types.
       const f = el('div', 'fallback');
