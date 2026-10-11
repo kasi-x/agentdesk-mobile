@@ -882,7 +882,7 @@ class _TriageScreenState extends State<TriageScreen> {
       final propose = secondStage == 'right';
       final data = <String, dynamic>{
         ...?binding?.payload,
-        if (propose) 'proposeAutomation': true,
+        if (propose) 'autoAllow': true,
       };
       _recordApproval(task);
       if (wasStamped) _resetStamp();
@@ -890,8 +890,7 @@ class _TriageScreenState extends State<TriageScreen> {
         task,
         actionName: binding?.actionName ?? 'approve',
         data: data,
-        source:
-            propose ? ActionSource.twoStageSwipe : ActionSource.swipeGesture,
+        source: propose ? ActionSource.twoStageSwipe : ActionSource.swipeGesture,
       );
     } else if (direction == CardSwiperDirection.left) {
       _resetStamp();

@@ -127,6 +127,8 @@ export class TaskHub {
         return this.resume();
       case "/rules":
         return this.rules(request);
+      case "/rules/simulate":
+        return this.simulate(request);
       case "/pair":
         return this.pair(request);
       case "/pair/redeem":
@@ -141,6 +143,20 @@ export class TaskHub {
         return json({ error: "not_found" }, 404);
     }
   }
+  /** Simulates the effect of a rule set against recent tasks (I-1002). */
+  private async simulate(request: Request): Promise<Response> {
+    const { rules } = (await request.json()) as { rules: Rule[] };
+    const now = Date.now();
+    const all = await this.state.storage.list<StoredTask>({ prefix: "task:" });
+    const recentTasks = Array.from(all.values())
+      .filter((t) => t.status === "pending")
+      .map((t) => t.task)
+      .slice(-50);
+
+    const { traffic, totalCount } = simulateTraffic(rules, recentTasks, now);
+    return json({ traffic, totalCount });
+  }
+
 
   /** SSE: snapshot first (reconnect resync), then live events. */
   private connect(): Response {
@@ -298,6 +314,21 @@ export class TaskHub {
   private async applyTriage(reply: ActionReply): Promise<TriageOutcome> {
     const key = `task:${reply.taskId}`;
 
+    // I-1003: If auto-allow is requested, derive and store a rule.
+    if (reply.data?.autoAllow === true) {
+      const learnedRuleId = `auto-allow-${reply.taskId}`;
+      const newRule = suggestLearnedRule(
+        stored.task,
+        reply.actionName === "approve" ? "approve" : "reject",
+        learnedRuleId,
+      );
+      const currentRules = await this.getRules();
+      if (!currentRules.some((r) => r.id === learnedRuleId)) {
+        const updatedRules = [...currentRules, newRule];
+        await this.state.storage.put(KEY_RULES, updatedRules);
+        await this.broadcast("ruleChanged", { rules: updatedRules });
+      }
+    }
     // Input-gated critical section: nothing but storage I/O between the
     // read and the write (docs/architecture.md).
     const stored = await this.state.storage.get<StoredTask>(key);
@@ -471,8 +502,14 @@ export class TaskHub {
   private async undo(request: Request): Promise<Response> {
     const req = (await request.json()) as UndoRequest;
     const key = `task:${req.taskId}`;
-
-    const stored = await this.state.storage.get<StoredTask>(key);
+    // I-1003: If the decision was auto-allowed, delete the learned rule on undo.
+    if (stored.pendingReply?.data?.autoAllow === true) {
+      const learnedRuleId = `auto-allow-${stored.task.taskId}`;
+      const currentRules = await this.getRules();
+      const updatedRules = currentRules.filter((r) => r.id !== learnedRuleId);
+      await this.state.storage.put(KEY_RULES, updatedRules);
+      await this.broadcast("ruleChanged", { rules: updatedRules });
+    }
     const decision = decideUndo(stored, req);
     if (decision.kind === "not_found") {
       return json({ error: "task_not_found", taskId: req.taskId }, 404);

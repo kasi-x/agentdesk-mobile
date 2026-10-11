@@ -42,12 +42,9 @@ function rejectTask(task) {
   });
 }
 
-/** Shift+→: 二段スワイプ相当 — approve and propose automating the rule (I-101). */
+/** Shift+→: 二段スワイプ相当 — approve and auto-allow the rule (I-101). */
 function twoStageApprove(task) {
-  approve(task, {
-    source: 'web_ui',
-    extra: { proposeAutomation: true },
-  });
+  approve(task, {source: 'web_ui', extra: {autoAllow: true}});
 }
 
 function onKeyDown(e) {

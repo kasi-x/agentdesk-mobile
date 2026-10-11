@@ -2,7 +2,7 @@
 
 > このドキュメントは、AgentDesk のすべての画面（Flutter Mobile / Web Triage UI / ウィジェット等）における
 > **フロントエンドのUI・グラフィック・レイアウト・情報設計** の絶対的な指針です。
-> プロダクト全体の思想は [philosophy.md](philosophy.md)、プロトコル仕様は [protocol.md](protocol.md) を参照。
+> プロダクト全体の思想は [philosophy.md](philosophy.md)、プロトコル仕様は [protocol.md](protocol.md)、デザイントークン・部品・状態の共通規約は [design-system.md](design-system.md) を参照。
 
 ---
 
@@ -140,3 +140,4 @@ AgentDesk のユーザーは、移動中・作業の合間・片手の親指だ�
 
 - **2026-10-06**: 原則2に「山札の順序自体がシグナル」を追加 — 緊急順を既定とし、緊急/新しい順/エージェント順の切替と優先度スコア式を明文化（I-123 / I-206）。
 - **2026-10-06**: 初版策定。カレンダービュー、二重表示排除、詳細ビュワー一本化の議論を反映し、フロントエンド特化の設計哲学として言語化。
+- **2026-10-11**: AgentDesk の意味トークン、共通コンポーネント契約、複数クライアント間の共通化方針を [design-system.md](design-system.md) に整理。

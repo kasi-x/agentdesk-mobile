@@ -205,9 +205,43 @@ class _InspectSheetState extends State<_InspectSheet> {
         return _segmented(c);
       case 'TextField':
         return _textField(c);
+      case 'AudioInput':
+        return _audioInput(c);
+      case 'ImagePicker':
+        return _imagePicker(c);
       default:
         return _unsupportedForm(c);
     }
+  }
+
+  Widget _audioInput(CardComponent c) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(c.properties['label'] ?? c.id, style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        ElevatedButton.icon(
+          onPressed: () {},
+          icon: const Icon(Icons.mic),
+          label: const Text('録音を開始'),
+        ),
+      ],
+    );
+  }
+
+  Widget _imagePicker(CardComponent c) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(c.properties['label'] ?? c.id, style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        ElevatedButton.icon(
+          onPressed: () {},
+          icon: const Icon(Icons.photo_library),
+          label: const Text('画像を選択'),
+        ),
+      ],
+    );
   }
 
   Widget _timePicker(CardComponent c) {

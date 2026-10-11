@@ -1148,6 +1148,53 @@ export interface RulesSimulationResponse {
   };
   totalCount: number;
 }
+/** Evaluate a rule set against a sample of tasks to preview traffic (I-1002). */
+export function simulateTraffic(
+  rules: Rule[],
+  tasks: TaskCardPayload[],
+  now: number,
+): RulesSimulationResponse {
+  const results = { autoApproved: 0, hitl: 0, rejected: 0 };
+  for (const task of tasks) {
+    const rule = rules.find((r) => ruleMatches(r, task, now));
+    if (!rule) {
+      results.hitl++;
+    } else if (rule.action === "reject") {
+      results.rejected++;
+    } else {
+      results.autoApproved++;
+    }
+  }
+  return {
+    traffic: results,
+    totalCount: tasks.length,
+  };
+}
+
+/**
+ * Derives a conservative learned rule from a task and action (I-1003).
+ *- Matches agent name and severity.
+ *- Leases for 24h or 20 approvals.
+ */
+export function suggestLearnedRule(
+  task: TaskCardPayload,
+  action: "approve" | "reject",
+  id: string,
+): Rule {
+  return {
+    id,
+    action,
+    match: {
+      agent: task.agent.name,
+      severity: [task.severity ?? "info"],
+    },
+    lease: {
+      until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      maxCount: 20,
+    },
+    enabled: true,
+  };
+}
 
 /** One-time pairing code TTL (I-808). */
 export const PAIR_TTL_MS = 5 * 60 * 1000;
