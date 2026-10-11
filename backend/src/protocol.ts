@@ -112,6 +112,8 @@ export interface RuleMatch {
   severity?: string[];
   /** Maximum `impact.cost.amount`; a card without a cost counts as 0. */
   maxCost?: number;
+  /** Minimum `confidence` score (0.0-1.0); a card without confidence counts as 0. */
+  minConfidence?: number;
   /** Substring of `groupKey`. */
   groupKey?: string;
 }
@@ -125,11 +127,13 @@ export interface RuleLease {
   maxCount?: number;
 }
 
-/** An auto-approval rule (I-304/I-807): matching NEW pending cards are
- *  approved by the hub with `source: "auto_rule"`, counting against the
+/** An auto-approval/rejection rule (I-304/I-807/I-1002): matching NEW pending cards are
+ *  processed by the hub with `source: "auto_rule"`, counting against the
  *  lease. Stored in the hub and managed via `GET/PUT /api/v1/rules`. */
 export interface Rule {
   id: string;
+  /** What to do when matched. Defaults to "approve" for backwards compatibility. */
+  action?: "approve" | "reject";
   match: RuleMatch;
   lease?: RuleLease;
   enabled: boolean;
@@ -157,6 +161,9 @@ export function ruleMatches(rule: Rule, task: TaskCardPayload, now: number): boo
     return false;
   }
   if (m.maxCost !== undefined && (task.impact?.cost?.amount ?? 0) > m.maxCost) {
+    return false;
+  }
+  if (m.minConfidence !== undefined && (task.confidence ?? 0) < m.minConfidence) {
     return false;
   }
   return true;
@@ -1073,6 +1080,12 @@ export function validateRules(body: unknown): ValidationResult<Rule[]> {
         }
         match.maxCost = m.maxCost;
       }
+      if (m.minConfidence !== undefined) {
+        if (typeof m.minConfidence !== "number" || !Number.isFinite(m.minConfidence)) {
+          return fail("rule.match.minConfidence must be a number");
+        }
+        match.minConfidence = m.minConfidence;
+      }
       if (m.groupKey !== undefined) {
         if (typeof m.groupKey !== "string") {
           return fail("rule.match.groupKey must be a string");
@@ -1104,14 +1117,36 @@ export function validateRules(body: unknown): ValidationResult<Rule[]> {
     if (typeof enabled !== "boolean") {
       return fail("rule.enabled must be a boolean");
     }
+    let action: "approve" | "reject" | undefined;
+    if (item.action !== undefined) {
+      if (item.action !== "approve" && item.action !== "reject") {
+        return fail("rule.action must be approve or reject");
+      }
+      action = item.action;
+    }
+
     rules.push({
       id,
+      ...(action !== undefined ? { action } : {}),
       match,
       ...(lease !== undefined ? { lease } : {}),
       enabled,
     });
   }
   return { ok: true, value: rules };
+}
+
+export interface RulesSimulationRequest {
+  rules: Rule[];
+}
+
+export interface RulesSimulationResponse {
+  traffic: {
+    autoApproved: number;
+    hitl: number;
+    rejected: number;
+  };
+  totalCount: number;
 }
 
 /** One-time pairing code TTL (I-808). */

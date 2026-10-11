@@ -36,6 +36,7 @@ treat every string as display-only text: no HTML, no JS, no WebView
 | POST | `/api/v1/pause` | Bearer `$CLIENT_TOKEN` | client | pause the fleet (I-403) |
 | POST | `/api/v1/resume` | Bearer `$CLIENT_TOKEN` | client | resume the fleet (I-403) |
 | GET/PUT | `/api/v1/rules` | Bearer `$CLIENT_TOKEN` | client | read / replace auto-approval rules (I-304/I-807) |
+| POST | `/api/v1/rules/simulate` | Bearer `$CLIENT_TOKEN` | client | preview funnel traffic for a given rule set (I-1002) |
 | POST | `/api/v1/pair` | Bearer `$CLIENT_TOKEN` | client | mint a one-time pairing code (I-808) |
 | POST | `/api/v1/pair/redeem` | none (the code is the credential) | client | redeem a code into a device token (I-808) |
 | POST/DELETE | `/api/v1/push/subscribe` | Bearer `$CLIENT_TOKEN` | client | register / remove a Web Push subscription (I-701) |
@@ -197,7 +198,8 @@ the inspect sheet).
 
 Inspect-form catalog: `TimePicker`, `DatePicker`, `Slider`
 (`min`/`max`/`default`/`divisions`), `Segmented` (`options`),
-`TextField` (`label`, `multiline`).
+`TextField` (`label`, `multiline`), `AudioInput` (`label`, `maxDuration`),
+`ImagePicker` (`label`, `allowCamera`, `allowGallery`).
 
 On submit the sheet collects `{ componentId: value }` for every form
 component, merges the `onSwipeRight.payload` underneath, and sends
@@ -628,3 +630,18 @@ GET    /api/v1/push/vapid        Authorization: Bearer $CLIENT_TOKEN
   `mailto:admin@localhost`）。`Authorization: vapid t=<jwt>, k=<public>`。
 - 送信先が `404` / `410` を返したら購読を削除する。その他の失敗は捨てる
   （再試行しない）。
+
+## Guardrails & Rules (I-1002)
+
+`GET /api/v1/rules` returns `[{ id, action, match, lease, enabled }]`.
+`PUT /api/v1/rules` replaces the entire list.
+
+* `action`: `"approve" | "reject"` (optional, defaults to `"approve"`). `"reject"` automatically blocks the task instead of approving.
+* `match`: Constraints that MUST all be true (AND). Available matchers:
+  * `agent` (substring)
+  * `severity` (array of allowed strings)
+  * `groupKey` (substring)
+  * `maxCost` (number)
+  * `minConfidence` (number 0.0-1.0; card must be ≥ this value)
+
+`POST /api/v1/rules/simulate` takes `{ rules: [...] }` and returns `{ traffic: { autoApproved, hitl, rejected }, totalCount }` representing how those rules would evaluate against a recent task sample.

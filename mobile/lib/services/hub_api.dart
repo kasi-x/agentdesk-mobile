@@ -44,6 +44,8 @@ class BulkResult {
 /// approves matches with `source: "auto_rule"` against the rule's lease.
 class AutoApprovalRule {
   final String id;
+  /// Action to take on match: 'approve' | 'reject' (default: 'approve')
+  final String action;
 
   /// Substring of `agent.name`; null = any agent.
   final String? agent;
@@ -65,11 +67,15 @@ class AutoApprovalRule {
 
   final bool enabled;
 
+  /// Minimum `confidence` score (0.0-1.0); null = any.
+  final double? minConfidence;
+
   const AutoApprovalRule({
     required this.id,
+    this.action = 'approve',
     this.agent,
+    this.minConfidence,
     this.severity = const <String>[],
-    this.maxCost,
     this.groupKey,
     this.leaseUntil,
     this.leaseMaxCount,
@@ -88,10 +94,12 @@ class AutoApprovalRule {
     final maxCountRaw = lease?['maxCount'];
     return AutoApprovalRule(
       id: '${raw['id'] ?? ''}',
+      action: raw['action'] is String ? raw['action'] as String : 'approve',
       agent: match['agent'] is String ? match['agent'] : null,
       severity:
           severityRaw is List ? severityRaw.whereType<String>().toList() : const <String>[],
       maxCost: maxCostRaw is num ? maxCostRaw.toDouble() : null,
+      minConfidence: match['minConfidence'] is num ? (match['minConfidence'] as num).toDouble() : null,
       groupKey: match['groupKey'] is String ? match['groupKey'] as String : null,
       leaseUntil: lease?['until'] is String ? lease!['until'] : null,
       leaseMaxCount: maxCountRaw is num ? maxCountRaw.toInt() : null,
@@ -105,8 +113,10 @@ class AutoApprovalRule {
           if (agent != null) 'agent': agent,
           if (severity.isNotEmpty) 'severity': severity,
           if (maxCost != null) 'maxCost': maxCost,
+          if (minConfidence != null) 'minConfidence': minConfidence,
           if (groupKey != null) 'groupKey': groupKey,
         },
+        'action': action,
         if (leaseUntil != null || leaseMaxCount != null)
           'lease': <String, dynamic>{
             if (leaseUntil != null) 'until': leaseUntil,
@@ -117,9 +127,11 @@ class AutoApprovalRule {
 
   AutoApprovalRule copyWith({bool? enabled}) => AutoApprovalRule(
         id: id,
+        action: action,
         agent: agent,
         severity: severity,
         maxCost: maxCost,
+        minConfidence: minConfidence,
         groupKey: groupKey,
         leaseUntil: leaseUntil,
         leaseMaxCount: leaseMaxCount,
@@ -136,6 +148,10 @@ abstract class HubRulesApi {
 
   /// Replaces the whole rule set; false when the save did not reach the hub.
   Future<bool> saveRules(List<AutoApprovalRule> rules);
+
+  /// Preview traffic distribution for a rule set (I-1002).
+  /// Returns null if simulation fails.
+  Future<Map<String, dynamic>?> simulateRules(List<AutoApprovalRule> rules);
 }
 
 /// Wave-2 server surface: server-side snooze, delegation and bulk triage
@@ -382,6 +398,29 @@ class HttpHubApi implements HubApi, HubApiV2, HubRulesApi {
       return res.statusCode == 200;
     } on Exception {
       return false;
+    }
+  }
+
+  @override
+  Future<Map<String, dynamic>?> simulateRules(List<AutoApprovalRule> rules) async {
+    try {
+      final res = await _client
+          .post(
+            _uri('/rules/simulate'),
+            headers: _headers,
+            body: jsonEncode(<String, dynamic>{
+              'rules': [for (final rule in rules) rule.toJson()],
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (res.statusCode != 200) return null;
+      final body = jsonDecode(res.body);
+      if (body is Map<String, dynamic>) {
+        return body;
+      }
+      return null;
+    } on Exception {
+      return null;
     }
   }
 }
