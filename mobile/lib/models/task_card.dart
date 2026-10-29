@@ -8,17 +8,27 @@
 class AgentInfo {
   final String name;
   final String? avatarUrl;
+  final bool? verified;
+  final List<String>? scopes;
 
-  const AgentInfo({required this.name, this.avatarUrl});
+  const AgentInfo({required this.name, this.avatarUrl, this.verified, this.scopes});
 
   factory AgentInfo.fromJson(dynamic raw) {
     if (raw is! Map) return const AgentInfo(name: 'Unknown agent');
+    List<String>? scopes;
+    if (raw['scopes'] is List) {
+      scopes = (raw['scopes'] as List).whereType<String>().toList();
+      if (scopes.isEmpty) scopes = null;
+    }
     return AgentInfo(
       name: (raw['name'] as String?) ?? 'Unknown agent',
       avatarUrl: raw['avatarUrl'] as String?,
+      verified: raw['verified'] is bool ? raw['verified'] as bool : null,
+      scopes: scopes,
     );
   }
 }
+
 
 class CardComponent {
   static int _anonCounter = 0;
@@ -260,6 +270,30 @@ class EditableHint {
   }
 }
 
+class TaskCardPreview {
+  final String? title;
+  final List<CardComponent> components;
+
+  const TaskCardPreview({this.title, required this.components});
+
+  factory TaskCardPreview.fromJson(dynamic raw) {
+    if (raw is! Map) return const TaskCardPreview(components: <CardComponent>[]);
+    final componentsRaw = raw['components'];
+    final components = <CardComponent>[];
+    if (componentsRaw is List) {
+      for (final c in componentsRaw) {
+        if (c is Map) {
+          components.add(CardComponent.fromJson(c));
+        }
+      }
+    }
+    return TaskCardPreview(
+      title: (raw['title'] as String?)?.isNotEmpty == true ? raw['title'] as String : null,
+      components: components,
+    );
+  }
+}
+
 class TaskCard {
   final String taskId;
   final String nonce;
@@ -315,6 +349,12 @@ class TaskCard {
   final double? priority;
   /// Hub marker on re-broadcasts after an agent update (I-204).
   final bool revised;
+  /// I-804: agent-declared scope required.
+  final String? requiredScope;
+  /// I-804: hub-stamped violation flag.
+  final bool scopeViolation;
+  /// I-208: dry-run preview.
+  final TaskCardPreview? preview;
 
   const TaskCard({
     required this.taskId,
@@ -347,6 +387,9 @@ class TaskCard {
     this.delegatedTo,
     this.priority,
     this.revised = false,
+    this.requiredScope,
+    this.scopeViolation = false,
+    this.preview,
   });
 
   factory TaskCard.fromJson(dynamic raw) {
@@ -437,6 +480,13 @@ class TaskCard {
           ? (raw['priority'] as num).toDouble()
           : null,
       revised: raw['revised'] is bool ? raw['revised'] as bool : false,
+      requiredScope: raw['requiredScope'] is String ? raw['requiredScope'] as String : null,
+      scopeViolation: raw['scopeViolation'] == true,
+      preview: raw['preview'] is Map ? () {
+        final pr = TaskCardPreview.fromJson(raw['preview']);
+        if (pr.components.isNotEmpty || pr.title != null) return pr;
+        return null;
+      }() : null,
     );
   }
 

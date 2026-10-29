@@ -9,9 +9,11 @@ class TriageActionReply {
 
   /// I-1003 swipe-to-learn: when true the hub learns a `"learned"` rule
   /// from this card on commit (`POST /api/v1/actions {learnRule: true}`).
-  /// Advisory only — old hubs ignore the unknown key; snooze/delegate
-  /// and partial approvals ignore it server-side too.
-  final bool learnRule;
+  /// I-1005 widened the wire shape: `true` OR a rule spec
+  /// `{match?, action?, lease?}` the hub merges over the card-derived
+  /// match. Advisory only — old hubs ignore the unknown key;
+  /// snooze/delegate and partial approvals ignore it server-side too.
+  final Object? learnRule;
 
   TriageActionReply({
     required this.taskId,
@@ -30,7 +32,8 @@ class TriageActionReply {
         'timestamp': timestamp.toUtc().toIso8601String(),
         'source': source,
         if (data.isNotEmpty) 'data': data,
-        if (learnRule) 'learnRule': true,
+        if (learnRule != null && learnRule != false)
+          'learnRule': learnRule,
       };
 
   factory TriageActionReply.fromJson(dynamic raw) {
@@ -55,7 +58,9 @@ class TriageActionReply {
       data: raw['data'] is Map
           ? Map<String, dynamic>.from(raw['data'] as Map)
           : const <String, dynamic>{},
-      learnRule: raw['learnRule'] == true,
+      learnRule: raw['learnRule'] is Map
+          ? Map<String, dynamic>.from(raw['learnRule'] as Map)
+          : raw['learnRule'] == true,
     );
   }
 }

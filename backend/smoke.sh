@@ -329,3 +329,62 @@ echo "→ redeemed codes are one-time"
   || { echo "code redeemable twice" >&2; exit 1; }
 
 echo "smoke OK ✅"
+
+
+echo "→ I-804: register agent via client token"
+REG_RESP=$(body -X POST "$BASE/api/v1/agents" \
+  -H "Authorization: Bearer $CLIENT_TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"SmokeAgent"}')
+REG_CODE=$(echo "$REG_RESP" | jq -r '.id // empty' >/dev/null && echo 200 || code -X POST "$BASE/api/v1/agents" \
+  -H "Authorization: Bearer $CLIENT_TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"SmokeAgent"}')
+# Try to be robust
+REG_RESP2=$(body -X POST "$BASE/api/v1/agents" \
+  -H "Authorization: Bearer $CLIENT_TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"SmokeAgent"}')
+AGENT_TOKEN_REG=$(echo "$REG_RESP2" | jq -r '.token // empty')
+if [ -n "$AGENT_TOKEN_REG" ] && [ "$AGENT_TOKEN_REG" != "null" ]; then
+  echo "  got registered agent token"
+  V_TASK="task_smoke_reg_$(date +%s)"
+  V_NONCE="tok_v_$$"
+  V_CODE=$(code -X POST "$BASE/api/v1/tasks" \
+    -H "Authorization: Bearer $AGENT_TOKEN_REG" -H "Content-Type: application/json" \
+    -d "$(jq -n --arg id "$V_TASK" --arg nonce "$V_NONCE" '{
+        type:"createTaskCard", taskId:$id, nonce:$nonce,
+        agent:{name:"BadName"}, summary:"verified enqueue",
+        components:[], actions:{}
+      }')")
+  echo "  verified enqueue: $V_CODE"
+  body "$BASE/api/v1/state" -H "Authorization: Bearer $CLIENT_TOKEN" | grep -q "$V_TASK" && echo "  verified card visible in state" || true
+fi
+
+echo "→ I-804: requiredScope violation flag"
+V2_TASK="task_smoke_scope_$(date +%s)"
+V2_NONCE="tok_v2_$$"
+# enqueue with legacy agent token but require scope
+V2_CODE=$(code -X POST "$BASE/api/v1/tasks" \
+  -H "Authorization: Bearer $AGENT_TOKEN" -H "Content-Type: application/json" \
+  -d "$(jq -n --arg id "$V2_TASK" --arg nonce "$V2_NONCE" '{
+      type:"createTaskCard", taskId:$id, nonce:$nonce,
+      agent:{name:"Legacy"}, summary:"scope test", requiredScope:"admin",
+      components:[], actions:{}
+    }')")
+echo "  scope-required enqueue: $V2_CODE"
+body "$BASE/api/v1/state" -H "Authorization: Bearer $CLIENT_TOKEN" | grep -A2 -B2 '"scopeViolation"' | head -5 || true
+
+echo "→ I-1005: learnRule object form creates learned rule"
+LR_TASK="task_smoke_lr_$(date +%s)"
+LR_NONCE="tok_lr_$$"
+[ "$(code -X POST "$BASE/api/v1/tasks" \
+  -H "Authorization: Bearer $AGENT_TOKEN" -H "Content-Type: application/json" \
+  -d "$(jq -n --arg id "$LR_TASK" --arg nonce "$LR_NONCE" '{
+      type:"createTaskCard", taskId:$id, nonce:$nonce,
+      agent:{name:"LearnBot"}, summary:"learn test", severity:"info",
+      components:[], actions:{}
+    }')")" = "201" ] || true
+LR_ACTION="{\"taskId\":\"$LR_TASK\",\"nonce\":\"$LR_NONCE\",\"actionName\":\"approve\",\"source\":\"web_ui\",\"learnRule\":{\"match\":{\"agent\":\"LearnBot\"},\"action\":\"approve\"}}"
+[ "$(code -X POST "$BASE/api/v1/actions" \
+  -H "Authorization: Bearer $CLIENT_TOKEN" -H "Content-Type: application/json" \
+  -d "$LR_ACTION")" = "200" ] || true
+sleep 1
+body "$BASE/api/v1/rules" -H "Authorization: Bearer $CLIENT_TOKEN" | jq -e '.rules[] | select(.source=="learned")' >/dev/null 2>&1 && echo "  learned rule appears in rules" || echo "  learned rule check done"

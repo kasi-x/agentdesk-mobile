@@ -15,6 +15,7 @@ import { agentName, riskLevel, choiceId, parseEditNumber, parseEditDateTime } fr
 import { postAction, postUndo, postBulk, postSnooze, postDelegate } from './net.js';
 import { render } from './render.js';
 import { recordProcessed } from './history.js';
+import { automationOffer, openAutomationSheet } from './automation.js';
 import { renderStampBanner, passGate } from './stamp.js';
 /** Rebuild stack from a server snapshot.
  *  Priority `order` (I-206 urgent/newest/agent) owns the ordering once
@@ -377,6 +378,8 @@ export function triage(task, { actionName, data, source, learnRule = false }) {
   render();
   // Executive Desk (I-1003): two-stage approves carry the learn semantic
   // as a top-level flag — the hub creates an auto rule from the card.
+  // I-1005 widened the wire shape: `true` OR {match, action, lease};
+  // any truthy value rides the POST verbatim.
   const reply = {
     taskId: task.taskId,
     nonce: task.nonce,
@@ -384,7 +387,7 @@ export function triage(task, { actionName, data, source, learnRule = false }) {
     source,
     data: data || {},
   };
-  if (learnRule) reply.learnRule = true;
+  if (learnRule) reply.learnRule = learnRule;
   deliver(reply, task);
 }
 
@@ -407,7 +410,14 @@ export async function deliver(reply, task) {
   try {
     const result = await postAction(reply);
     if (result === 'ok') {
-      toast(`${reply.actionName} しました`, { undo: () => undo(task.taskId) });
+      // I-1005: a committed approve/reject (not delegated, not already
+      // carrying learnRule) earns a one-tap "同種を自動化" offer inside
+      // the undo toast — the sheet itself does scope+deadline+preview.
+      const offer = automationOffer(task, reply);
+      toast(`${reply.actionName} しました`, {
+        undo: () => undo(task.taskId),
+        actions: offer ? [{ label: '同種を自動化', onClick: () => openAutomationSheet(offer) }] : [],
+      });
     } else if (result === 'conflict') {
       toast('処理済み — このタスクはすでに別デバイスで処理されています');
     } else if (result === 'not_found') {

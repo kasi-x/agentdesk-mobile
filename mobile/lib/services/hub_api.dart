@@ -423,7 +423,8 @@ class HttpHubApi implements HubApi, HubApiV2, HubRulesApi, HubGuardrailsApi {
                     'action': reply.actionName,
                     'source': reply.source,
                     if (reply.data.isNotEmpty) 'data': reply.data,
-                    if (reply.learnRule) 'learnRule': true,
+                    if (reply.learnRule != null && reply.learnRule != false)
+                      'learnRule': reply.learnRule,
                   },
               ],
             }),

@@ -50,6 +50,9 @@
 
   <div id="guardrails-backdrop" class="sheet-backdrop" hidden></div>
   <section id="guardrails-panel" class="sheet guardrails-panel" aria-label="自動承認ルール" hidden></section>
+  <div id="automation-backdrop" class="sheet-backdrop" hidden></div>
+  <section id="automation-sheet" class="sheet" aria-label="自動化ルール" hidden></section>
+
   <section id="settings" class="settings" hidden>
     <label class="field">
       <span>Hub URL</span>
@@ -127,7 +130,7 @@
     </div>
   </div>
 
-  <div id="toasts" class="toasts"></div>
+  <div id="toasts" class="toasts" aria-live="polite" aria-atomic="false"></div>
 
   <script type="module" src="/app.js"></script>
 </body>

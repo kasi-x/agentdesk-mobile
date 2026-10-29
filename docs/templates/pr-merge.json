@@ -1,0 +1,57 @@
+{
+  "type": "createTaskCard",
+  "taskId": "tmpl_pr_merge",
+  "nonce": "tmpl_nonce_pr",
+  "protocolVersion": 1,
+  "agent": {
+    "name": "CI/CD Agent"
+  },
+  "summary": "PR #123 のマージ承認",
+  "severity": "info",
+  "components": [
+    {
+      "id": "root_card",
+      "component": "TriageCard",
+      "children": ["reason", "diff"]
+    },
+    {
+      "id": "reason",
+      "component": "Text",
+      "properties": {
+        "text": "全てのCIチェックが成功しました。マージしてデプロイしますか？",
+        "variant": "body"
+      }
+    },
+    {
+      "id": "diff",
+      "component": "DiffBox",
+      "properties": {
+        "title": "変更内容",
+        "before": "main",
+        "after": "feature/xyz (3 commits)",
+        "highlight": "info"
+      }
+    }
+  ],
+  "actions": {
+    "onSwipeRight": {
+      "actionName": "approve",
+      "label": "マージしてデプロイ",
+      "payload": {
+        "decision": "MERGE"
+      }
+    },
+    "onSwipeLeft": {
+      "actionName": "reject",
+      "label": "マージしない",
+      "payload": {
+        "decision": "NO_MERGE"
+      }
+    }
+  },
+  "impact": {
+    "summary": "main ブランチにマージし、自動デプロイを実行します",
+    "reversible": false,
+    "scope": "本番環境"
+  }
+}

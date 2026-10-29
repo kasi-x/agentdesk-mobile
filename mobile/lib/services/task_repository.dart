@@ -250,6 +250,10 @@ class TaskRepository extends ChangeNotifier {
   /// Fires when the hub reports 409 (task already processed elsewhere).
   /// The UI maps it to a double haptic tap (I-131).
   void Function()? onConflict;
+  /// I-1005: fired after a committed decide action so the UI can offer
+  /// 「同種を自動化」 — receives the decided card and the rule action
+  /// ('approve' | 'reject') the scope sheet should draft.
+  void Function(TaskCard task, String action)? onAutomatable;
 
   HubApiV2? get _v2 => api is HubApiV2 ? api as HubApiV2 : null;
 
@@ -495,7 +499,7 @@ class TaskRepository extends ChangeNotifier {
     required String actionName,
     Map<String, dynamic>? data,
     required String source,
-    bool learnRule = false,
+    Object? learnRule = false,
   }) async {
     // Snapshot row selections/edits BEFORE remove() — remove clears them.
     final extras = (data?.containsKey('reason') ?? false) ||
@@ -528,6 +532,15 @@ class TaskRepository extends ChangeNotifier {
     final result = await _deliver(reply);
     if (result == ActionSendResult.sent) {
       _toast('$actionName しました', undoableTaskId: task.taskId);
+      // I-1005: a committed decide action (not snooze/delegate/ask, not
+      // already learning, not a partial multi-party approval) earns a
+      // one-tap scoped-rule offer — the sheet does range+deadline+preview.
+      if (!_nonApproveActions.contains(actionName) &&
+          learnRule != true &&
+          task.requiredApprovals <= 1) {
+        onAutomatable?.call(
+            task, actionName == 'reject' ? 'reject' : 'approve');
+      }
     } else if (result == ActionSendResult.networkError) {
       _toast('オフライン: 端末に保存しました（再接続時に送信）',
           undoableTaskId: task.taskId);

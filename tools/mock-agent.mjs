@@ -9,7 +9,9 @@
 //   node tools/mock-agent.mjs result <taskId> [--wait 10]
 //   node tools/mock-agent.mjs pair [--device NAME] [--user USER]
 //   node tools/mock-agent.mjs pair <code>
+//   node tools/mock-agent.mjs register
 //
+
 // Env: HUB_URL (default http://127.0.0.1:8787), AGENT_TOKEN (default
 // dev-agent-token), CLIENT_TOKEN (default dev-client-token),
 // REPLY_SIGNING_SECRET (defaults to AGENT_TOKEN),
@@ -251,6 +253,43 @@ function sampleCards(callbackBase) {
         onSwipeLeft: { actionName: "reject", label: "却下", payload: { decision: "DECLINE" } },
       },
     },
+    {
+      type: "createTaskCard",
+      taskId: shortId(),
+      agent: { name: "Ops Agent" },
+      confidence: 0.9,
+      severity: "warning",
+      summary: "本番リソースのスケーリング承認",
+      requiredScope: "ops:scale",
+      replyUrl: `${callbackBase}/callback/ops`,
+      components: [
+        {
+          id: "request",
+          component: "Text",
+          properties: {
+            text: "CPU使用率が閾値を超過しているため、スケーリングの承認を求めます。",
+            variant: "body",
+          },
+        },
+      ],
+      actions: {
+        onSwipeRight: { actionName: "approve", label: "スケールアウト", payload: { decision: "SCALE" } },
+        onSwipeLeft: { actionName: "reject", label: "却下", payload: { decision: "DENY" } },
+      },
+      preview: {
+        title: "実行プレビュー",
+        components: [
+          {
+            id: "cmd",
+            component: "Text",
+            properties: {
+              text: "kubectl scale deployment/app --replicas=6 (dry-run)",
+              source: "external",
+            },
+          },
+        ],
+      },
+    },
   ];
 }
 
@@ -424,6 +463,22 @@ function signatureBadge(req, raw) {
   return ok ? `🔐 signature verified (${event ?? "unknown"})` : "🚨 signature MISMATCH";
 }
 
+
+/** I-804: register a new agent via the hub using CLIENT_TOKEN. */
+async function register() {
+  const { status, text } = await hub("/api/v1/agents", { body: { name: "Mock Agent" }, token: CLIENT_TOKEN });
+  console.log(`register  ${status}`);
+  try {
+    const body = JSON.parse(text);
+    console.log(JSON.stringify(body, null, 2));
+    if (status === 201 && body.token) {
+      console.log(`\n🔑 agent token (keep secret):\n  export AGENT_TOKEN_REGISTERED=${body.token}`);
+    }
+  } catch {
+    console.log(text);
+  }
+}
+
 function listen(port) {
   const server = http.createServer((req, res) => {
     let raw = "";
@@ -460,9 +515,11 @@ if (command === "listen") {
   await result(positional(), argPort("--wait", 0));
 } else if (command === "pair") {
   await pair(positional(), flagValue("--device"), flagValue("--user"));
+} else if (command === "register") {
+  await register();
 } else {
   console.error(
-    "usage: node tools/mock-agent.mjs <send|listen|update|withdraw|result|pair> [args] [--port 8799]",
+    "usage: node tools/mock-agent.mjs <send|listen|update|withdraw|result|pair|register> [args] [--port 8799]",
   );
   process.exit(1);
 }

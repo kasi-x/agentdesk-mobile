@@ -46,12 +46,23 @@ treat every string as display-only text: no HTML, no JS, no WebView
 | POST | `/api/v1/rules/simulate` | Bearer `$CLIENT_TOKEN` | client | dry-run rules (+ optional candidate) over recent cards (I-1002) |
 | POST | `/api/v1/attachments` | Bearer `$CLIENT_TOKEN` | client | upload a small audio/image blob (I-1001) |
 | GET | `/api/v1/attachments/{id}` | Bearer `$CLIENT_TOKEN` **or** `$AGENT_TOKEN` | client/agent | download the raw bytes (I-1001) |
+| POST | `/api/v1/agents` | Bearer `$CLIENT_TOKEN` | client | register a named agent; returns `{id, token}` (token shown once) (I-804) |
+| GET | `/api/v1/agents` | Bearer `$CLIENT_TOKEN` | client | list registered agents (no tokens) (I-804) |
 | GET | `/healthz` | none | ops | liveness |
 
 Client auth accepts the shared `$CLIENT_TOKEN` **or any issued device
 token** (`dev_…`, I-808/I-809). A device token binds a `user` and routes
 that request to the per-user Durable Object (`user:<user>`);
 `$CLIENT_TOKEN` routes to the shared `global` DO. Unknown tokens → `401`.
+
+**Agent auth (I-804):** `POST /api/v1/tasks` accepts `Authorization: Bearer $AGENT_TOKEN` (legacy, unverified)
+or `Authorization: Bearer agd_<token>` (registered agent). A registered token resolves via the global DO's
+token index (`agentToken:<sha256>` → agent id) and stored agent record. On enqueue, verified agents have
+`agent` replaced by the registered `{name, avatarUrl}` (impersonation prevention), `agent.verified = true`,
+and `agent.scopes` stamped (hub-set). Legacy tokens leave `agent` as sent and do **not** set `verified`.
+Cards may declare `requiredScope` (agent-declared). If `requiredScope` is set and (agent is unverified or
+the scope is not in `agent.scopes`), the hub stamps `scopeViolation: true` on the card payload (the card
+still enqueues; clients warn). `AgentInfo` gains `verified?: boolean` and `scopes?: string[]` (hub-set).
 
 Errors: `401` bad/missing token · `400` invalid payload (message says why)
 · `404` `task_not_found` / `invalid_code` · `409` `already_processed` /
@@ -184,6 +195,9 @@ Field notes:
 | `delegatedTo` | hub adds | colleague the card was delegated to (I-501); agents never send it |
 | `priority` | hub adds | urgency score (higher = more urgent); never sent by agents — see below |
 | `revised` | hub adds | `true` on a `createTaskCard` re-broadcast after an agent update (I-204) or a delegation (I-501) |
+| `requiredScope` | opt | agent-declared scope required (I-804). See above. |
+| `scopeViolation` | hub adds | `true` if unverified or missing required scope (I-804); card still enqueues. |
+| `preview` | opt | dry-run preview `{title?, components:[...]}` rendered in details/inspect as 実行プレビュー (I-208). Malformed preview/components dropped. |
 
 ## Component catalog
 
@@ -236,7 +250,9 @@ A wrong nonce → `409 bad_nonce`. Unknown task → `404`. Accepted actions
 are broadcast as `dismissTask` to all connected devices and forwarded to
 `replyUrl` after the undo grace window closes.
 `learnRule: true` on an approve/reject also stores a `"learned"` rule
-(I-1003, see §自動承認ルール).
+(I-1003). `learnRule` may also be an object `{match?, action?, lease?}` (I-1005);
+the rule is built from the card but merged/overridden with provided constraints,
+`source: "learned"`. `learnRule` is ignored on snooze/delegate/partial approvals.
 
 ### 返信 `data` の素通し項目
 

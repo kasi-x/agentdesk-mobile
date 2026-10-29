@@ -12,22 +12,32 @@ export function clear(node) {
   node.textContent = '';
 }
 
-/** Pill toast in #toasts; `undo` adds a 「元に戻す」 action button (I-104). */
-export function toast(message, { undo, duration } = {}) {
+/** Pill toast in #toasts; `undo` adds a 「元に戻す」 action button (I-104).
+ * `actions: [{label, onClick}]` (I-1005) renders extra action buttons —
+ * each removes the toast then runs its handler. */
+export function toast(message, { undo, duration, actions } = {}) {
   const t = el('div', 'toast', message);
-  if (undo) {
-    const btn = el('button', 'toast-undo', '元に戻す');
+  const act = (label, fn) => {
+    const btn = el('button', 'toast-undo', label);
     btn.type = 'button';
     btn.onclick = () => {
       t.remove();
-      undo();
+      fn();
     };
     t.appendChild(btn);
+  };
+  if (Array.isArray(actions)) {
+    for (const a of actions) {
+      if (a && typeof a.label === 'string' && typeof a.onClick === 'function') {
+        act(a.label, a.onClick);
+      }
+    }
   }
+  if (undo) act('元に戻す', undo);
   const host = document.getElementById('toasts');
   if (!host) return;
   host.appendChild(t);
-  setTimeout(() => t.remove(), duration || (undo ? 5000 : TOAST_MS));
+  setTimeout(() => t.remove(), duration || (undo || (actions && actions.length) ? 6000 : TOAST_MS));
 }
 
 export function setConnected(on) {

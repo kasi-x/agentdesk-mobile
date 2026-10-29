@@ -1,0 +1,86 @@
+{
+  "name": "AgentDesk - Ask for Approval",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "start",
+      "name": "Start",
+      "type": "n8n-nodes-base.start",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.HUB_URL}}/api/v1/tasks",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.AGENT_TOKEN}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"type\": \"createTaskCard\",\n  \"agent\": {\"name\": \"n8n Agent\"},\n  \"summary\": \"={{$json[\\\"summary\\\"] || \\\"Approval needed\\\"}}\",\n  \"components\": [\n    {\"id\": \"root_card\", \"component\": \"TriageCard\", \"children\": [\"reason\"]},\n    {\"id\": \"reason\", \"component\": \"Text\", \"properties\": {\"text\": \"={{$json[\\\"details\\\"] || $json[\\\"summary\\\"]}}\", \"variant\": \"body\"}}\n  ],\n  \"actions\": {\n    \"onSwipeRight\": {\"actionName\": \"approve\", \"label\": \"Approve\", \"payload\": {\"decision\": \"APPROVE\"}},\n    \"onSwipeLeft\": {\"actionName\": \"reject\", \"label\": \"Reject\", \"payload\": {\"decision\": \"REJECT\"}}\n  }\n}"
+      },
+      "id": "create_task",
+      "name": "Create Task",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "= {{$env.HUB_URL}}/api/v1/tasks/{{$json[\"taskId\"]}}/result?wait=60",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.AGENT_TOKEN}}"
+            }
+          ]
+        }
+      },
+      "id": "get_result",
+      "name": "Get Result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [650, 300]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Create Task",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Task": {
+      "main": [
+        [
+          {
+            "node": "Get Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "agentdesk-n8n-template"
+  }
+}

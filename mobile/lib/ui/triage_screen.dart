@@ -1,10 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart' show SemanticsService;
 import 'package:flutter/services.dart';
 import 'package:flutter_card_swiper/flutter_card_swiper.dart';
-import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:provider/provider.dart';
 
 import '../models/task_card.dart';
 import '../models/triage_action.dart';
@@ -12,6 +13,7 @@ import '../services/priority.dart';
 import '../services/task_repository.dart';
 import 'guardrails_screen.dart';
 import 'inspect_sheet.dart';
+import 'motion.dart';
 import 'colors.dart';
 import 'settings_screen.dart';
 import 'stack_entry.dart';
@@ -25,6 +27,7 @@ import 'widgets/practice_screen.dart';
 import 'widgets/processed_tray.dart';
 import 'widgets/reject_reason_sheet.dart';
 import 'widgets/swipe_threshold_haptic.dart';
+import 'widgets/rule_scope_sheet.dart';
 import 'widgets/task_card_view.dart';
 
 class TriageScreen extends StatefulWidget {
@@ -78,7 +81,7 @@ class _TriageScreenState extends State<TriageScreen> {
     final repo = context.read<TaskRepository>();
     repo.onToast = _showToast;
     repo.onConflict = _conflictHaptic;
-    repo.start();
+    repo.onAutomatable = _offerAutomation;
     _ticker = Timer.periodic(const Duration(seconds: 10), (_) {
       if (mounted) setState(() {}); // refresh elapsed + countdown labels (I-203)
     });
@@ -104,8 +107,16 @@ class _TriageScreenState extends State<TriageScreen> {
     await prefs.setBool('practice_seen', true);
   }
 
+  /// I-1004 a11y announce helper — non-visual feedback for decision
+  /// results and conflicts (haptics alone don't reach screen readers).
+  void _announce(String message) {
+    SemanticsService.sendAnnouncement(
+        View.of(context), message, TextDirection.ltr);
+  }
+
   void _showToast(String message, {String? undoableTaskId}) {
     if (!mounted) return;
+    _announce(message);
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
@@ -124,13 +135,48 @@ class _TriageScreenState extends State<TriageScreen> {
       );
   }
 
+  /// I-1005: one-tap offer inside the decision toast's spot — a compact
+  /// chip replaces the toast so 元に戻す AND 同種を自動化 stay visible.
+  void _offerAutomation(TaskCard task, String action) {
+    if (!mounted) return;
+    final repo = context.read<TaskRepository>();
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 6),
+          content: Row(
+            children: [
+              const Expanded(child: Text('処理しました')),
+              TextButton(
+                onPressed: () {
+                  ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                  showRuleScopeSheet(
+                    context,
+                    task: task,
+                    action: action,
+                    api: repo.api,
+                  );
+                },
+                child: const Text('同種を自動化'),
+              ),
+            ],
+          ),
+          action: SnackBarAction(
+            label: '元に戻す',
+            onPressed: () => repo.undo(task.taskId),
+          ),
+        ),
+      );
+  }
+
   /// Two short taps — the "rejected, too late" signal for a 409 (I-131).
   void _conflictHaptic() {
     HapticFeedback.selectionClick();
+    _announce('処理済み — 別のデバイスで承認済みです');
     Future<void>.delayed(const Duration(milliseconds: 90),
         HapticFeedback.selectionClick);
   }
-
   /// Optimistic: the card leaves the stack right now; the decision is
   /// delivered async and queued when offline (FR-2.1/2.2/2.3).
   void _triage(
@@ -138,7 +184,7 @@ class _TriageScreenState extends State<TriageScreen> {
     required String actionName,
     Map<String, dynamic>? data,
     required String source,
-    bool learnRule = false,
+    Object? learnRule = false,
   }) {
     if (task.severity == 'critical') {
       HapticFeedback.heavyImpact();
@@ -268,7 +314,35 @@ class _TriageScreenState extends State<TriageScreen> {
       pendingByAgent.update(task.agent.name, (c) => c + 1,
           ifAbsent: () => 1);
     }
-    return Scaffold(
+    // I-1004 a11y: full keyboard parity — same verbs the swipes
+    // perform (web mirrors this in keyboard.js).
+    return CallbackShortcuts(
+      bindings: <ShortcutActivator, VoidCallback>{
+        const SingleActivator(LogicalKeyboardKey.arrowRight): () {
+          final top = _topDecideTask(entries);
+          if (top != null) _controller.swipe(CardSwiperDirection.right);
+        },
+        const SingleActivator(LogicalKeyboardKey.arrowLeft): () {
+          final top = _topDecideTask(entries);
+          if (top != null) _controller.swipe(CardSwiperDirection.left);
+        },
+        const SingleActivator(LogicalKeyboardKey.arrowDown): () {
+          if (_topDecideTask(entries) != null) {
+            _controller.swipe(CardSwiperDirection.bottom);
+          }
+        },
+        const SingleActivator(LogicalKeyboardKey.enter): () {
+          final top = _topDecideTask(entries);
+          if (top != null) _inspect(top);
+        },
+        const SingleActivator(LogicalKeyboardKey.keyM): () {
+          final top = _topDecideTask(entries);
+          if (top != null) _showMoreActions(top);
+        },
+      },
+      child: Focus(
+        autofocus: true,
+        child: Scaffold(
       appBar: AppBar(
         title: const Text('AgentDesk',
             style: TextStyle(fontWeight: FontWeight.w800)),
@@ -285,8 +359,8 @@ class _TriageScreenState extends State<TriageScreen> {
                   Icons.circle,
                   size: 10,
                   color: connected
-                      ? const Color(0xFF7BE494)
-                      : const Color(0xFFFFB020),
+                      ? PopColors.syncOk
+                      : PopColors.syncSending,
                 ),
               ),
             ),
@@ -345,6 +419,8 @@ class _TriageScreenState extends State<TriageScreen> {
           const ProcessedTray(),
         ],
       ),
+        ),
+      ),
     );
   }
 
@@ -356,6 +432,15 @@ class _TriageScreenState extends State<TriageScreen> {
       _topKey = key;
       _topSince = DateTime.now();
     }
+  }
+
+  /// Top card when the keyboard can act on it (single non-choose card).
+  TaskCard? _topDecideTask(List<StackEntry> entries) {
+    if (entries.isEmpty) return null;
+    final e = entries.first;
+    if (e.isBundle || e.single == null) return null;
+    if (e.single!.decisionKind == 'choose') return null;
+    return e.single;
   }
 
   /// Emergency stop broadcast by the hub: approve actions are disabled
@@ -465,6 +550,10 @@ class _TriageScreenState extends State<TriageScreen> {
                 numberOfCardsDisplayed:
                     entries.length >= 3 ? 3 : entries.length,
                 threshold: thresholdPx,
+                // I-1004: OS reduced-motion collapses the card flight —
+                // the decision still lands instantly, no sweep travel.
+                duration: animDuration(
+                    context, const Duration(milliseconds: 200)),
                 allowedSwipeDirection: isChoose
                     ? const AllowedSwipeDirection.only(
                         // Choose cards (I-111): up = A, down = B;
@@ -669,6 +758,15 @@ class _TriageScreenState extends State<TriageScreen> {
               onTap: () =>
                   _controller.swipe(CardSwiperDirection.bottom),
             ),
+            // I-1004 discoverability: the second-stage swipe and the
+            // four-corner drop zones are shortcuts — the same results
+            // must be reachable from a labeled menu (隠しジェスチャー禁止,
+            // strategy.md P1). One entry point per action.
+            _BarAction(
+              icon: Icons.more_horiz,
+              label: 'その他',
+              onTap: () => _showMoreActions(top.single!),
+            ),
             if (riskLevel(top.single!) == RiskLevel.locked)
               Column(
                 mainAxisSize: MainAxisSize.min,
@@ -709,6 +807,101 @@ class _TriageScreenState extends State<TriageScreen> {
 
   static String _choiceLabel(TaskCard task, int index) =>
       task.choices.length > index ? task.choices[index].label : '?';
+
+  /// I-1004 discoverability: explicit entries for the hidden gestures —
+  /// two-stage approve/reject automation, the drop-zone destinations,
+  /// and the details entry. Each item calls the same handler the
+  /// gesture would.
+  void _showMoreActions(TaskCard task) {
+    final repo = context.read<TaskRepository>();
+    final locked = riskLevel(task) == RiskLevel.locked;
+    HapticFeedback.selectionClick();
+    showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      backgroundColor: PopColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.search),
+              title: const Text('詳細を見る'),
+              onTap: () {
+                Navigator.of(ctx).pop();
+                _inspect(task);
+              },
+            ),
+            if (!locked && !repo.paused)
+              ListTile(
+                leading: const Icon(Icons.bolt),
+                title: const Text('承認して同種を自動化'),
+                subtitle: const Text('右に奥までスワイプと同じ'),
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  final binding = task.onSwipeRight;
+                  _triage(
+                    task,
+                    actionName: binding?.actionName ?? 'approve',
+                    data: <String, dynamic>{
+                      ...?binding?.payload,
+                      'proposeAutomation': true,
+                    },
+                    source: ActionSource.twoStageSwipe,
+                    learnRule: true,
+                  );
+                },
+              ),
+            ListTile(
+              leading: const Icon(Icons.volume_off_outlined),
+              title: const Text('却下して同種をミュート'),
+              subtitle: const Text('左に奥までスワイプと同じ'),
+              onTap: () {
+                Navigator.of(ctx).pop();
+                _rejectWithReasons(task, muteSimilar: true);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.send_outlined),
+              title: const Text('同僚に回す'),
+              onTap: () {
+                Navigator.of(ctx).pop();
+                _delegate(task);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.schedule),
+              title: const Text('1時間後に再表示'),
+              onTap: () {
+                Navigator.of(ctx).pop();
+                HapticFeedback.mediumImpact();
+                unawaited(repo.serverSnooze(task,
+                    after: const Duration(hours: 1)));
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.wb_sunny_outlined),
+              title: const Text('明朝に再表示'),
+              onTap: () {
+                Navigator.of(ctx).pop();
+                final now = DateTime.now();
+                var morning = DateTime(now.year, now.month, now.day, 7);
+                if (!morning.isAfter(now)) {
+                  morning = morning.add(const Duration(days: 1));
+                }
+                HapticFeedback.mediumImpact();
+                unawaited(repo.serverSnooze(task,
+                    after: morning.difference(DateTime.now())));
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
 
   // ------------------------------------------------------------------

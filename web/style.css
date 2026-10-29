@@ -33,6 +33,24 @@
   --sev-info: #0a84ff;
   --sev-warning: #ff9f0a;
   --sev-critical: #ff453a;
+  /* I-1004 semantic roles — meanings, not just values. Sync/communication
+   * states never borrow severity hues; external content is isolated by
+   * border+surface, not a danger color (design-system.md §2). */
+  --accent: var(--blue);
+  --accent-hover: #2492ff;
+  --on-accent: #ffffff;
+  --approve: var(--green);
+  --reject: var(--red);
+  --sync-pending: var(--text-3);
+  --sync-sending: var(--orange);
+  --sync-ok: var(--green);
+  --sync-failed: var(--red);
+  --sync-conflict: var(--yellow);
+  --external-border: var(--fill);
+  --external-surface: var(--surface-2);
+  --verified: var(--green);
+  --unverified: var(--text-3);
+  --scope-warn-fg: var(--orange);
   --shadow-card:
     0 10px 34px rgba(0, 0, 0, 0.5),
     0 2px 8px rgba(0, 0, 0, 0.35);
@@ -226,7 +244,7 @@ body {
 }
 
 .btn.primary:hover {
-  background: #2492ff;
+  background: var(--accent-hover);
 }
 
 .btn.ok {
@@ -2096,8 +2114,63 @@ body {
 .delivery-warn {
   font-size: 12px;
   font-weight: 600;
-  color: var(--orange);
+  color: var(--sync-failed);
   padding: 6px 14px 0;
+}
+
+/* I-804/I-208/I-1004: verified identity, scope warning, dry-run preview,
+ * discoverable two-stage approve. */
+.agent-verified {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--verified);
+}
+
+.agent-unverified {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--unverified);
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
+.scope-warn {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--scope-warn-fg);
+  background: var(--surface-2);
+  border-left: 3px solid var(--scope-warn-fg);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 8px 0 2px;
+}
+
+.preview-box {
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--surface-2);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.btn.auto-approve {
+  font-size: 12px;
+  padding: 6px 10px;
+}
+
+/* details chevron became a real button — strip button chrome, keep glyph */
+.details-chev {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 4px;
+  min-width: 24px;
+  min-height: 24px;
+  cursor: pointer;
+  color: var(--text-3);
 }
 
 .hist-fail {

@@ -1,5 +1,7 @@
 # AgentDesk Mobile
 
+[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/kasi-x/agentdesk-mobile)
+
 モバイルファーストな Human-in-the-Loop トリアージUI —
 「チャットを捨て、片手親指のスワイプだけで無数の自律型エージェントを監督・承認する」。
 
@@ -21,7 +23,15 @@ Docs: [requirements.ja.md](docs/requirements.ja.md) (原案) ·
 [philosophy.md](docs/philosophy.md) (全体原則) ·
 [design-philosophy.md](docs/design-philosophy.md) (UI設計原則) ·
 [product-strategy-review.md](docs/product-strategy-review.md) (戦略レビュー) ·
-[IDEA.md](IDEA.md) (アイデア置き場) · [TODO.md](TODO.md) (実行計画).
+[IDEA.md](IDEA.md) (アイデア置き場) · [TODO.md](TODO.md) (実行計画) · [Quickstart](docs/quickstart.md)
+
+## Integrations
+
+- [LangGraph adapter](sdk/langgraph/) — `ask_human()` helper for LangGraph nodes
+- [Claude Code hook](tools/claude-code-hook/) — PreToolUse/Notification/Stop hooks for approvals
+- [n8n workflow template](tools/n8n/) — HTTP Request nodes for AgentDesk
+- [MCP server](tools/mcp-server/) — stdio MCP tools `agentdesk_ask` / `agentdesk_result`
+- [TypeScript SDK](sdk/typescript/) / [Python SDK](sdk/python/)
 
 ## Quickstart (local E2E, 3 terminals)
 

@@ -260,9 +260,91 @@ export class TaskHub {
         return this.attachmentPut(request);
       case "/attachments/get":
         return this.attachmentGet(url);
+      case "/agents/register":
+        return this.agentsRegister(request);
+      case "/agents":
+        return this.agentsList(request);
+      case "/agent-auth":
+        return this.agentAuthRoute(request);
       default:
         return json({ error: "not_found" }, 404);
     }
+  }
+
+
+  private async sha256Hex(s: string): Promise<string> {
+    const enc = new TextEncoder();
+    const buf = await crypto.subtle.digest("SHA-256", enc.encode(s));
+    const arr = Array.from(new Uint8Array(buf));
+    return arr.map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  private async agentsRegister(request: Request): Promise<Response> {
+    // Client auth required (caller is client token)
+    const body = (await request.json().catch(() => ({}))) as {
+      name?: unknown;
+      avatarUrl?: unknown;
+      scopes?: unknown;
+    };
+    if (typeof body.name !== "string" || body.name.length === 0) {
+      return json({ error: "invalid_payload" }, 400);
+    }
+    const token = `agd_${crypto.randomUUID().replace(/-/g, "")}${crypto.randomUUID().replace(/-/g, "")}`;
+    const tokenHash = await this.sha256Hex(token);
+    const id = `agent_${crypto.randomUUID().slice(0, 12)}`;
+    const record = {
+      id,
+      name: body.name,
+      ...(typeof body.avatarUrl === "string" ? { avatarUrl: body.avatarUrl } : {}),
+      ...(Array.isArray(body.scopes)
+        ? { scopes: (body.scopes as unknown[]).filter((x): x is string => typeof x === "string") }
+        : {}),
+      createdAt: new Date().toISOString(),
+    };
+    await this.state.storage.put(`agent:${id}`, record);
+    await this.state.storage.put(`agentToken:${tokenHash}`, id);
+    return json({ id, token }, 201);
+  }
+
+  private async agentsList(request: Request): Promise<Response> {
+    const list = await this.state.storage.list({ prefix: "agent:" });
+    const agents: unknown[] = [];
+    for (const [k, v] of list) {
+      if (k.startsWith("agentToken:")) continue;
+      const rec = v as any;
+      agents.push({
+        id: rec.id,
+        name: rec.name,
+        ...(rec.avatarUrl ? { avatarUrl: rec.avatarUrl } : {}),
+        ...(Array.isArray(rec.scopes) ? { scopes: rec.scopes } : {}),
+      });
+    }
+    return json({ agents });
+  }
+
+  private async resolveAgentFromToken(token: string | null): Promise<{ id: string; record: any } | null> {
+    if (!token) return null;
+    if (!token.startsWith("agd_")) return null;
+    const h = await this.sha256Hex(token);
+    const agentId = await this.state.storage.get<string>(`agentToken:${h}`);
+    if (!agentId) return null;
+    const record = await this.state.storage.get(`agent:${agentId}`);
+    if (!record) return null;
+    return { id: agentId, record };
+  }
+
+  private async agentAuthRoute(request: Request): Promise<Response> {
+    const body = (await request.json().catch(() => ({}))) as { token?: unknown };
+    const resolved = await this.resolveAgentFromToken(typeof body.token === "string" ? body.token : null);
+    if (!resolved) return json({ error: "unauthorized" }, 401);
+    const rec: any = resolved.record;
+    return json({
+      verified: true,
+      agentId: resolved.id,
+      name: rec.name,
+      avatarUrl: rec.avatarUrl,
+      scopes: Array.isArray(rec.scopes) ? rec.scopes : [],
+    });
   }
 
   /** SSE: snapshot first (reconnect resync), then live events. */
@@ -288,13 +370,47 @@ export class TaskHub {
   }
 
   private async enqueue(request: Request): Promise<Response> {
-    const task = (await request.json()) as TaskCardPayload;
+    const raw = await request.json();
+    let task: TaskCardPayload;
+    let agentAuth: any = null;
+    if (raw && typeof raw === "object" && "task" in (raw as any)) {
+      task = (raw as any).task as TaskCardPayload;
+      agentAuth = (raw as any).agentAuth ?? null;
+    } else {
+      task = raw as TaskCardPayload;
+    }
     const key = `task:${task.taskId}`;
     const existing = await this.state.storage.get<StoredTask>(key);
     if (existing && existing.status !== "processed") {
       return json({ error: "duplicate_task", taskId: task.taskId }, 409);
     }
     const now = Date.now();
+    // Agent identity verification / permission scopes (I-804)
+    if (agentAuth && agentAuth.verified) {
+      task = {
+        ...task,
+        agent: {
+          name: agentAuth.name ?? task.agent.name,
+          ...(agentAuth.avatarUrl ? { avatarUrl: agentAuth.avatarUrl } : {}),
+          verified: true,
+          scopes: Array.isArray(agentAuth.scopes) ? agentAuth.scopes : [],
+        },
+      } as TaskCardPayload;
+    } else {
+      // unverified/legacy - ensure hub doesn't trust agent-sent verified/scopes? keep as-is but drop if sent? contract says "hub-set, drop agent-sent"
+      if ((task.agent as any).verified !== undefined || (task.agent as any).scopes !== undefined) {
+        const { verified: _v, scopes: _s, ...rest } = task.agent as any;
+        task = { ...task, agent: rest } as TaskCardPayload;
+      }
+    }
+    // requiredScope violation
+    if (task.requiredScope) {
+      const scopes = (task.agent as any).scopes;
+      const verified = (task.agent as any).verified === true;
+      if (!verified || !Array.isArray(scopes) || !scopes.includes(task.requiredScope)) {
+        (task as any).scopeViolation = true;
+      }
+    }
     const stored: StoredTask = {
       task,
       status: "pending",
@@ -547,11 +663,11 @@ export class TaskHub {
       taskId: reply.taskId,
       by: reply.source,
     });
-    // I-1003: learn a rule from this swipe once the commit is recorded.
+    // I-1003/I-1005: learn a rule from this swipe once the commit is recorded.
     // Fire-and-forget is wrong here (the rule must exist before the undo
     // window closes, and the write is a single storage put) — but it
     // never fails the action: errors are logged, the triage stands.
-    if (reply.learnRule === true) {
+    if (reply.learnRule === true || (reply as any).learnRule) {
       try {
         await this.learnRuleFromSwipe(stored.task, reply);
       } catch (err) {
@@ -1005,22 +1121,39 @@ export class TaskHub {
    *  effect for cards enqueued afterwards. An identical rule (same
    *  action + match) is not duplicated. */
   private async learnRuleFromSwipe(task: TaskCardPayload, reply: ActionReply): Promise<void> {
-    const decision = reply.actionName === "approve" || reply.actionName === "reject"
-      ? reply.actionName
-      : null;
+    const lr = (reply as any).learnRule;
+    let decision: "approve" | "reject" | null = null;
+    if (lr && typeof lr === "object") {
+      if (lr.action === "approve" || lr.action === "reject") decision = lr.action;
+      else if (reply.actionName === "approve" || reply.actionName === "reject") decision = reply.actionName;
+    } else {
+      decision = reply.actionName === "approve" || reply.actionName === "reject"
+        ? reply.actionName
+        : null;
+    }
     if (decision === null) return;
     const rules = await this.getRules();
-    const match = {
+    let match: any = {
       agent: task.agent.name,
       severity: [task.severity ?? "info"],
       ...(task.groupKey !== undefined ? { groupKey: task.groupKey } : {}),
     };
+    if (lr && typeof lr === "object" && lr.match && typeof lr.match === "object") {
+      if (typeof lr.match.agent === "string" && lr.match.agent.length > 0) match.agent = lr.match.agent;
+      if (Array.isArray(lr.match.severity) && lr.match.severity.length > 0) match.severity = lr.match.severity;
+      if (typeof lr.match.groupKey === "string" && lr.match.groupKey.length > 0) match.groupKey = lr.match.groupKey;
+      else if (lr.match.groupKey === null) delete match.groupKey;
+      if (typeof lr.match.maxCost === "number") match.maxCost = lr.match.maxCost;
+      if (typeof lr.match.minConfidence === "number") match.minConfidence = lr.match.minConfidence;
+    }
     const duplicate = rules.some(
       (rule) =>
         (rule.action ?? "approve") === decision &&
         rule.match.agent === match.agent &&
-        (rule.match.severity ?? []).join("|") === match.severity.join("|") &&
-        (rule.match.groupKey ?? undefined) === (match.groupKey ?? undefined),
+        ((rule.match.severity ?? []).join("|")) === ((match.severity ?? []).join("|")) &&
+        (rule.match.groupKey ?? undefined) === (match.groupKey ?? undefined) &&
+        rule.match.maxCost === match.maxCost &&
+        rule.match.minConfidence === match.minConfidence,
     );
     if (duplicate) return;
     const learned: Rule = {
@@ -1029,6 +1162,7 @@ export class TaskHub {
       enabled: true,
       action: decision,
       source: "learned",
+      ...(lr && typeof lr === "object" && lr.lease ? { lease: lr.lease } : {}),
     };
     await this.state.storage.put(KEY_RULES, [...rules, learned]);
     await this.broadcast("ruleChanged", { rules: [...rules, learned] });

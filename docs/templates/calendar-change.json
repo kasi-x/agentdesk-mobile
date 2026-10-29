@@ -1,0 +1,58 @@
+{
+  "type": "createTaskCard",
+  "taskId": "tmpl_calendar_change",
+  "nonce": "tmpl_nonce_calendar",
+  "protocolVersion": 1,
+  "agent": {
+    "name": "Calendar & Meeting Agent"
+  },
+  "summary": "ミーティングの日程変更リクエスト",
+  "severity": "info",
+  "components": [
+    {
+      "id": "root_card",
+      "component": "TriageCard",
+      "children": ["diff_view", "reasoning_text"]
+    },
+    {
+      "id": "diff_view",
+      "component": "DiffBox",
+      "properties": {
+        "title": "定例ミーティング時間",
+        "before": "2026-10-05 14:00",
+        "after": "2026-10-05 16:30",
+        "highlight": "warning"
+      }
+    },
+    {
+      "id": "reasoning_text",
+      "component": "Text",
+      "properties": {
+        "text": "参加者3名中2名が14:00に重複予定があるため、全員が空いている16:30への変更を提案します。",
+        "variant": "caption"
+      }
+    }
+  ],
+  "actions": {
+    "onSwipeRight": {
+      "actionName": "approve",
+      "label": "16:30 に変更する",
+      "payload": {
+        "decision": "ACCEPT",
+        "newTime": "2026-10-05 16:30"
+      }
+    },
+    "onSwipeLeft": {
+      "actionName": "reject",
+      "label": "却下",
+      "payload": {
+        "decision": "DECLINE"
+      }
+    }
+  },
+  "impact": {
+    "summary": "定例ミーティングを 16:30 に変更して全員に通知します",
+    "reversible": true,
+    "scope": "参加者 3 名"
+  }
+}

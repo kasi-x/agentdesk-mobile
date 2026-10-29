@@ -28,10 +28,31 @@ abstract final class PopColors {
   static const Color orange = Color(0xFFFF9F0A);
   static const Color yellow = Color(0xFFFFD60A);
 
-  /// Severity dot colors.
+  // I-1004 semantic roles — meanings, not just values. Mirrors the
+  // semantic block in web/style.css :root. Sync/communication states
+  // never borrow severity hues; external content is isolated by
+  // border+surface, not a danger color (design-system.md §2).
+  static const Color accent = blue; // action/focus accent
+  static const Color approve = green; // approve/success result
+  static const Color reject = red; // reject/destructive (not severity)
+  static const Color syncPending = text3; // unsent / queued
+  static const Color syncSending = orange; // in flight
+  static const Color syncOk = green; // delivered / connected
+  static const Color syncFailed = red; // delivery failed
+  static const Color syncConflict = yellow; // 409 conflict
+  static const Color externalBorder = fill; // external-quote separator
+  static const Color externalSurface = surface2; // quote-block fill
+  static const Color verified = green; // hub-verified agent identity
+  static const Color unverified = text3; // unregistered agent
+  static const Color scopeWarn = orange; // unregistered scope request
+
+  /// Severity dot colors. Severity is its own meaning axis — `info`
+  /// aliases the accent hue but keeps a separate role so a future
+  /// accent change can't silently recolor severity (design-system.md §2).
+  static const Color severityInfo = blue;
   static Color severityDot(String severity) => switch (severity) {
         'critical' => red,
         'warning' => orange,
-        _ => blue,
+        _ => severityInfo,
       };
 }

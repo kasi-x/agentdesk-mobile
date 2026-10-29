@@ -103,7 +103,25 @@ export default {
       }
 
       if (url.pathname === "/api/v1/tasks" && request.method === "POST") {
-        if (!authorized(request, env.AGENT_TOKEN)) return unauthorized(request, env);
+        const token = bearer(request);
+        let agentAuth: any = null;
+        if (token && token.startsWith("agd_")) {
+          // resolve via global DO
+          const resAuth = await hubStub(env, "global").fetch("https://task-hub/agent-auth", {
+            method: "POST",
+            body: JSON.stringify({ token }),
+            headers: { "content-type": "application/json" },
+          });
+          if (resAuth.ok) {
+            agentAuth = await resAuth.json();
+          } else {
+            return unauthorized(request, env);
+          }
+        } else if (!authorized(request, env.AGENT_TOKEN)) {
+          return unauthorized(request, env);
+        } else {
+          agentAuth = { verified: false, legacy: true };
+        }
         const parsed = validateTaskCard(await request.json());
         if (!parsed.ok) {
           return cors(
@@ -116,7 +134,7 @@ export default {
           "https://task-hub/enqueue",
           {
             method: "POST",
-            body: JSON.stringify(parsed.value),
+            body: JSON.stringify({ task: parsed.value, agentAuth }),
             headers: { "content-type": "application/json" },
           },
         );
@@ -341,6 +359,25 @@ export default {
         return cors(rebuilt(doRes), request, env);
       }
 
+      // Agent registry (I-804)
+      if (url.pathname === "/api/v1/agents" && request.method === "POST") {
+        const scope = await clientScope(request, env);
+        if (scope === null) return unauthorized(request, env);
+        const res = await hubStub(env, scope).fetch("https://task-hub/agents/register", {
+          method: "POST",
+          body: await request.text(),
+          headers: { "content-type": "application/json" },
+        });
+        return cors(rebuilt(res), request, env);
+      }
+      if (url.pathname === "/api/v1/agents" && request.method === "GET") {
+        const scope = await clientScope(request, env);
+        if (scope === null) return unauthorized(request, env);
+        const res = await hubStub(env, scope).fetch("https://task-hub/agents", {
+          method: "GET",
+        });
+        return cors(rebuilt(res), request, env);
+      }
       // Web Push subscriptions (I-701).
       if (url.pathname === "/api/v1/push/subscribe" &&
         (request.method === "POST" || request.method === "DELETE")) {

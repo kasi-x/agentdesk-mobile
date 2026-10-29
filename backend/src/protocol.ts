@@ -9,9 +9,22 @@
  */
 export const PROTOCOL_VERSION = 1;
 
+export interface RegisteredAgent {
+  id: string;
+  name: string;
+  avatarUrl?: string;
+  scopes?: string[];
+  createdAt: string;
+}
+
 export interface AgentInfo {
   name: string;
   avatarUrl?: string;
+  /** Hub-set when the enqueuing agent authenticated via a registered agent
+   *  token (I-804). Dropped if sent by agents. */
+  verified?: boolean;
+  /** Hub-set scopes attached to the registered agent (I-804). */
+  scopes?: string[];
 }
 
 export interface CardComponent {
@@ -226,6 +239,14 @@ export interface TaskCardPayload {
   /** Hub marker on `createTaskCard` re-broadcasts after an agent update
    *  (I-204): clients may show a 「更新されました」 hint. */
   revised?: boolean;
+  /** I-804: agent-declared scope required to act on this card. */
+  requiredScope?: string;
+  /** I-804: hub stamps true when the agent is unverified or lacks the
+   *  required scope (card still enqueues; clients warn). */
+  scopeViolation?: boolean;
+  /** I-208: dry-run preview rendered in the details/inspect view as a
+   *  実行プレビュー section. Malformed preview/components are dropped. */
+  preview?: { title?: string; components: CardComponent[] };
 }
 
 export interface ActionReply {
@@ -245,7 +266,12 @@ export interface ActionReply {
   /** I-1003: on a committed approve/reject, also learn a `"learned"`
    *  rule from this card's agent/severity/groupKey. Advisory only —
    *  ignored on snooze/delegate/partial approvals. */
-  learnRule?: true;
+  /**
+   * I-1003/I-1005: learn a rule from this swipe. `true` = current behavior.
+   * Object form builds a rule from the card but merges/overrides with
+   * provided match/action/lease; `source: "learned"`.
+   */
+  learnRule?: boolean | { match?: RuleMatch; action?: "approve" | "reject"; lease?: RuleLease };
 }
 
 /** Longest accepted snooze duration. */
@@ -799,6 +825,43 @@ export function validateTaskCard(
     );
   }
 
+  // I-804: optional agent-declared required scope.
+  let requiredScope: string | undefined;
+  if (body.requiredScope !== undefined) {
+    if (typeof body.requiredScope !== "string" || body.requiredScope.length === 0) {
+      return fail("requiredScope must be a non-empty string");
+    }
+    requiredScope = body.requiredScope;
+  }
+
+  // I-208: preview. Lenient validation — malformed fields/components
+  // dropped, field dropped if nothing valid remains.
+  let preview: { title?: string; components: CardComponent[] } | undefined;
+  if (isRecord(body.preview)) {
+    const raw = body.preview;
+    const componentsRaw = raw.components;
+    if (Array.isArray(componentsRaw)) {
+      const kept: CardComponent[] = [];
+      for (const c of componentsRaw) {
+        if (
+          isRecord(c) &&
+          typeof c.id === "string" &&
+          typeof c.component === "string"
+        ) {
+          kept.push(c as unknown as CardComponent);
+        }
+      }
+      if (kept.length > 0) {
+        preview = {
+          components: kept,
+          ...(typeof raw.title === "string" && raw.title.length > 0
+            ? { title: raw.title }
+            : {}),
+        };
+      }
+    }
+  }
+
   // Hub-set delegation target (I-501). Agents never send it; accepted so
   // an update round-trips the current value.
   let delegatedTo: string | undefined;
@@ -888,6 +951,8 @@ export function validateTaskCard(
     ...(requiredApprovals !== undefined ? { requiredApprovals } : {}),
     ...(choices !== undefined ? { choices } : {}),
     ...(delegatedTo !== undefined ? { delegatedTo } : {}),
+    ...(requiredScope !== undefined ? { requiredScope } : {}),
+    ...(preview !== undefined ? { preview } : {}),
   };
   return { ok: true, value };
 }
@@ -973,6 +1038,55 @@ export function validateActionReply(
   if (typeof actionName !== "string" || actionName.length === 0) {
     return fail("actionName (string) is required");
   }
+
+  // I-1005: learnRule can be boolean or object form.
+  let learnRule:
+    | true
+    | { match?: RuleMatch; action?: "approve" | "reject"; lease?: RuleLease }
+    | undefined;
+  if (body.learnRule === true) {
+    learnRule = true;
+  } else if (isRecord(body.learnRule)) {
+    const lr = body.learnRule;
+    const lrMatch = lr.match;
+    let match: RuleMatch | undefined;
+    if (isRecord(lrMatch)) {
+      const m: RuleMatch = {};
+      if (typeof lrMatch.agent === "string" && lrMatch.agent.length > 0) {
+        m.agent = lrMatch.agent;
+      }
+      if (Array.isArray(lrMatch.severity)) {
+        const kept = lrMatch.severity.filter(
+          (s): s is "info" | "warning" | "critical" =>
+            s === "info" || s === "warning" || s === "critical",
+        );
+        if (kept.length > 0) m.severity = kept;
+      }
+      if (typeof lrMatch.groupKey === "string" && lrMatch.groupKey.length > 0) {
+        m.groupKey = lrMatch.groupKey;
+      }
+      if (typeof lrMatch.maxCost === "number") m.maxCost = lrMatch.maxCost;
+      if (
+        typeof lrMatch.minConfidence === "number" &&
+        lrMatch.minConfidence >= 0 &&
+        lrMatch.minConfidence <= 1
+      ) {
+        m.minConfidence = lrMatch.minConfidence;
+      }
+      if (Object.keys(m).length > 0) match = m;
+    }
+    const action =
+      lr.action === "approve" || lr.action === "reject" ? lr.action : undefined;
+    const lease = isRecord(lr.lease) ? (lr.lease as RuleLease) : undefined;
+    if (match !== undefined || action !== undefined || lease !== undefined) {
+      learnRule = {
+        ...(match ? { match } : {}),
+        ...(action ? { action } : {}),
+        ...(lease ? { lease } : {}),
+      };
+    }
+  }
+
   return {
     ok: true,
     value: {
@@ -985,7 +1099,11 @@ export function validateActionReply(
           : new Date().toISOString(),
       source: typeof body.source === "string" ? body.source : "unknown",
       ...(isRecord(body.data) ? { data: body.data } : {}),
-      ...(body.learnRule === true ? { learnRule: true as const } : {}),
+      ...(learnRule === true
+        ? { learnRule: true as const }
+        : learnRule && typeof learnRule === "object"
+          ? { learnRule }
+          : {}),
     },
   };
 }

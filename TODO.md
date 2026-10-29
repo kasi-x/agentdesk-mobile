@@ -19,19 +19,25 @@
 ## Now — 安全に速く払える土台(P2・P5)
 
 誤操作に強くするのが最優先。スワイプUIの最大の弱点を先に潰す。
-- [ ] **デザインシステムをWeb／Flutterへ反映 (I-1004)**: セマンティック色・文字・余白・カード階層を揃え、仕様値をCSSとFlutterテーマに反映する。通常／高リスク／同期状態の意味を両クライアントで統一。
-- [ ] **動きと高度な操作を段階的に整える (I-1004)**: カード遷移、詳細展開、スワイプ／長押しの応答を仕様に合わせ、追加機能は隠しジェスチャーに頼らず発見可能にする。
-- [ ] **操作可能性と仕上がりを検証 (I-1004)**: タッチ・キーボード・読み上げ、文字拡大、動きの軽減を確認し、モバイル／Web双方で色・状態・操作結果の一貫性を検証する。
-- [ ] **判断から安全なルール育成 (I-1003, I-1005)**: 承認・却下直後に「今回だけ／同種を自動許可／金額・範囲・期間つき」を選択。適用範囲・期限・影響プレビュー・取り消しを必須化。戦略は [docs/strategy.md](docs/strategy.md)。
-- [ ] **5分で最初の実タスク接続 (I-1006, I-903)**: 主要エージェント向け完成済み導線を用意し、初回接続から実タスク承認→動作再開までを5分以内に体験可能にする。
-- [ ] **身元確認と実行前プレビュー (I-804, I-208)**: 登録済みエージェントの身元確認、実行対象・権限範囲の検証、送信内容のドライランプレビューを高価値操作の前提にする。
-
-
+- [x] **デザインシステムをWeb／Flutterへ反映 (I-1004)**: セマンティック色・文字・余白・カード階層を揃え、仕様値をCSSとFlutterテーマに反映する。通常／高リスク／同期状態の意味を両クライアントで統一。
+      → web `style.css` に同期・verified・scope-warn のセマンティックトークン、mobile `PopColors` に同一意味のトークン(approve/reject/syncOK/syncSending/syncFailed/syncConflict/verified/unverified/scopeWarn/external*)。severity は意味軸を分離(severityInfo)。色だけでなくバッジ・アイコン・テキスト併記。
+- [x] **動きと高度な操作を段階的に整える (I-1004)**: カード遷移、詳細展開、スワイプ／長押しの応答を仕様に合わせ、追加機能は隠しジェスチャーに頼らず発見可能にする。
+      → mobile `motion.dart`(reduceMotion/animDuration)をカード反転・詳細展開・バナー・スワイパーに適用。下部バーに「その他」ボトムシート(詳細/承認+自動化/却下+ミュート/委任/1h後/明朝)で全ジェスチャーを発見可能化。web は prefers-reduced-motion メディアクエリ済み。
+- [x] **操作可能性と仕上がりを検証 (I-1004)**: タッチ・キーボード・読み上げ、文字拡大、動きの軽減を確認し、モバイル／Web双方で色・状態・操作結果の一貫性を検証する。
+      → mobile: SemanticsService.sendAnnouncement で決定結果・409 を読み上げ、CallbackShortcuts(→→承認/←却下/↓後で/Enter詳細/Mメニュー)、textScaler 0.85–1.6 clamp。web: 矢印キー+Enter+Shift+→。両クライアントで同一意味トークン。flutter analyze/test + node:test + smoke.sh 全グリーン、ブラウザ実表示確認済み。
+- [x] **判断から安全なルール育成 (I-1003, I-1005)**: 承認・却下直後に「今回だけ／同種を自動許可／金額・範囲・期間つき」を選択。適用範囲・期限・影響プレビュー・取り消しを必須化。戦略は [docs/strategy.md](docs/strategy.md)。
+      → protocol: `learnRule` を bool → object({match,action,lease})に拡張(hub はカード派生 match にマージ、smoke で検証済み)。mobile `rule_scope_sheet.dart` + web `automation.js`: 承認/却下後に「同種を自動化」トースト → 適用範囲(agent+severity+groupKey+金額上限)・期限(7日/30日/無制限)・POST /rules/simulate 影響プレビュー・明示キャンセル。web automation.test.mjs 追加。
+- [x] **5分で最初の実タスク接続 (I-1006, I-903)**: 主要エージェント向け完成済み導線を用意し、初回接続から実タスク承認→動作再開までを5分以内に体験可能にする。
+      → docs/quickstart.md + docs/templates/(4テンプレート) + tools/claude-code-hook/(session hook) + sdk/langgraph/(アダプタ) + tools/n8n/(ノード設定) + README Deploy-to-Cloudflare ボタン + tools/templates-check.mjs(テンプレ検証)。
+- [x] **身元確認と実行前プレビュー (I-804, I-208)**: 登録済みエージェントの身元確認、実行対象・権限範囲の検証、送信内容のドライランプレビューを高価値操作の前提にする。
+      → hub: agentAuth 検証で verified/scopes をスタンプ、agent 送信 verified を除去、requiredScope 不整合で scopeViolation=true(smoke 検証済み)。両クライアント: verified バッジ「✓ 確認済み」/未確認「未確認」(critical・violation 時のみ)、scope-warn バナー、詳細に「実行プレビュー」(A2UI セーフカタログ経由)。
 ## Next — 「The Executive Desk」動的ガードレールとネゴシエーションの基盤
 
 - [x] **ガードレールの視覚的プレビュー (I-1002)**: `protocol` (Rules API 拡張, 推定トラフィック割合の計算), `client` (スライダー/トグルによる閾値調整UI, ファネルアニメーション)
-- [ ] **スワイプによるルール生成 (I-1003)**: `hub` (アクションからのRule学習ロジック), `client` (上段スワイプ時のアクション追加「Approve & Auto-allow」)
-- [ ] **高帯域コンテキスト(音声/画像)のフィードバック (I-1001)**: `protocol` (A2UIフォーム拡張: `audio`, `image`), `client` (マイク・カメラネイティブ呼び出し, プレビューと送信)
+- [x] **スワイプによるルール生成 (I-1003)**: `hub` (アクションからのRule学習ロジック), `client` (上段スワイプ時のアクション追加「Approve & Auto-allow」)
+      → 二段スワイプで `learnRule:true` / web Shift+→で同様。I-1005 で bool→object に拡張、learned ルールは `source:"learned"` で一覧・削除可。
+- [x] **高帯域コンテキスト(音声/画像)のフィードバック (I-1001)**: `protocol` (A2UIフォーム拡張: `audio`, `image`), `client` (マイク・カメラネイティブ呼び出し, プレビューと送信)
+      → `POST /api/v1/attachments`(protocol.ts)+`attachmentId/kind/contentType` 参照。mobile `_audioCapture`/`_imageCapture`(inspect_sheet)、web `capture.js`+`inspect.js`+`net.js`。
 
 ## Next — 捌く量を減らす(P8)と、エージェントへの返事の質
 

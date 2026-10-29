@@ -1,0 +1,71 @@
+{
+  "type": "createTaskCard",
+  "taskId": "tmpl_refund_approval",
+  "nonce": "tmpl_nonce_refund",
+  "protocolVersion": 1,
+  "agent": {
+    "name": "Billing Agent"
+  },
+  "summary": "返金申請の承認確認",
+  "severity": "warning",
+  "components": [
+    {
+      "id": "root_card",
+      "component": "TriageCard",
+      "children": ["reason", "details"]
+    },
+    {
+      "id": "reason",
+      "component": "Text",
+      "properties": {
+        "text": "顧客から返金申請が届いています。",
+        "variant": "body"
+      }
+    },
+    {
+      "id": "details",
+      "component": "DiffBox",
+      "properties": {
+        "title": "返金詳細",
+        "before": "金額: ¥5,000 (請求済み)",
+        "after": "金額: ¥5,000 (返金予定)",
+        "highlight": "warning"
+      }
+    }
+  ],
+  "actions": {
+    "onSwipeRight": {
+      "actionName": "approve",
+      "label": "返金を承認",
+      "payload": {
+        "decision": "APPROVE_REFUND"
+      }
+    },
+    "onSwipeLeft": {
+      "actionName": "reject",
+      "label": "却下",
+      "payload": {
+        "decision": "REJECT_REFUND"
+      }
+    },
+    "rejectReasons": [
+      {
+        "id": "policy",
+        "label": "ポリシー違反"
+      },
+      {
+        "id": "insufficient_evidence",
+        "label": "証拠不足"
+      }
+    ]
+  },
+  "impact": {
+    "summary": "顧客に ¥5,000 を返金します",
+    "reversible": false,
+    "cost": {
+      "amount": 5000,
+      "currency": "JPY"
+    },
+    "scope": "顧客1名"
+  }
+}

@@ -359,9 +359,12 @@ function updateCountdown(el2) {
   el2.textContent = parts.text;
 }
 
-setInterval(() => {
+const _countdownTimer = setInterval(() => {
   document.querySelectorAll('.countdown[data-expires]').forEach(updateCountdown);
 }, 5000);
+// node:test: don't keep the event loop alive (browsers return a number,
+// which has no unref).
+if (_countdownTimer && typeof _countdownTimer.unref === 'function') _countdownTimer.unref();
 
 const expandedIds = new Set();
 
@@ -389,6 +392,20 @@ export function renderCard(task, { focused = false } = {}) {
   } else {
     avatar.textContent = (agent.name || '?').slice(0, 1).toUpperCase();
   }
+  // Information reduction (P1/P8): caption/external texts are 裏面 material —
+  // they render inside the details panel, not on the front. Computed
+  // before `_hasExtra` (the flag reads `movedTexts.length`).
+  const movedTexts = [];
+  const frontComps = [];
+  for (const comp of orderedComponents(task)) {
+    const isNarrative = comp.component === 'Text' &&
+      (comp.properties?.variant === 'caption' || comp.properties?.source === 'external');
+    if (isNarrative) movedTexts.push(comp);
+    else frontComps.push(comp);
+  }
+  const preview = task.preview && typeof task.preview === 'object' &&
+    Array.isArray(task.preview.components) && task.preview.components.length
+    ? task.preview : null;
   // timeInfo scan (main): needed for the chevron + 詳細時刻 row
   let timeInfo = null;
   for (const comp of orderedComponents(task)) {
@@ -402,34 +419,47 @@ export function renderCard(task, { focused = false } = {}) {
   }
   const hasContext = !!(ctx && (ctx.reasoning || ctx.requester && ctx.requester.name ||
     (Array.isArray(ctx.participants) && ctx.participants.length) || ctx.source && ctx.source.label));
-  const _hasExtra = hasContext || timeInfo || movedTexts.length > 0 ||
+  const _hasExtra = hasContext || timeInfo || movedTexts.length > 0 || !!preview ||
     (impact && (impact.summary || impact.cost)) ||
     (pct !== null && pct < 90 && reasons.length > 0) || !!task.expiresAt;
   header.appendChild(avatar);
   header.appendChild(el('span', 'card-agent', agent.name || 'Agent'));
+  // I-804: 身元確認。Verified agents get a quiet ✓ (meaning = icon+text,
+  // never color alone); unverified only speaks up on critical/violation
+  // cards — silence elsewhere (Zero Noise).
+  if (agent.verified === true) {
+    header.appendChild(el('span', 'agent-verified', '✓ 確認済み'));
+  } else if (sev === 'critical' || task.scopeViolation === true) {
+    header.appendChild(el('span', 'agent-unverified', '未確認'));
+  }
   if (task.delegatedTo) header.appendChild(el('span', 'deleg-badge', `→${task.delegatedTo}`));
   header.appendChild(el('span', `sev-dot ${sev === 'info' ? '' : sev}`.trim()));
   const timeWrap = el('span', 'card-meta-time', timeAgo(task.createdAt));
   header.appendChild(timeWrap);
+  let chevBtn = null;
   if (_hasExtra) {
-    const chev = el('span', 'details-chev' + (expandedIds.has(task.taskId) ? ' open' : ''));
-    header.appendChild(chev);
+    chevBtn = el('button', 'details-chev' + (expandedIds.has(task.taskId) ? ' open' : ''));
+    chevBtn.type = 'button';
+    chevBtn.setAttribute('aria-label', '詳細を見る');
+    chevBtn.setAttribute('aria-expanded', expandedIds.has(task.taskId) ? 'true' : 'false');
+    header.appendChild(chevBtn);
   }
   inner.appendChild(header);
+
+  // I-804: 権限範囲外フラグ — the agent asked for a scope it isn't
+  // registered for. Non-color cue: banner text + icon.
+  if (task.scopeViolation === true) {
+    const req = typeof task.requiredScope === 'string' && task.requiredScope
+      ? `「${task.requiredScope}」` : 'この操作';
+    inner.appendChild(el('div', 'scope-warn',
+      `⚠ 未登録の権限 — このエージェントは ${req} の実行権限を登録していません`));
+  }
 
   // Headline: the summary. The 承認すると… result statement lives in
   // 詳細 (結果 row) — the front stays as short as possible.
   inner.appendChild(el('div', 'summary', task.summary || ''));
 
-  // Information reduction (P1/P8): caption/external texts are 裏面 material —
-  // they render inside the details panel, not on the front.
-  const movedTexts = [];
-  for (const comp of orderedComponents(task)) {
-    const isNarrative = comp.component === 'Text' &&
-      (comp.properties?.variant === 'caption' || comp.properties?.source === 'external');
-    if (isNarrative) movedTexts.push(comp);
-    else inner.appendChild(renderComponent(comp, task));
-  }
+  for (const comp of frontComps) inner.appendChild(renderComponent(comp, task));
 
   // Quiet meta: ONLY the urgent countdown (<=5m / past). 信頼度 is gone
   // (user decision); the full deadline lives in 詳細 — one place, never two.
@@ -461,7 +491,7 @@ export function renderCard(task, { focused = false } = {}) {
     const wrap = el('div', 'details');
     const panel = el('div', 'details-panel' + (expanded ? ' open' : ''));
     const clip = el('div', 'details-clip');
-    clip.appendChild(buildDetailsList(task, { ctx, impact, reasons, movedTexts, timeInfo }));
+    clip.appendChild(buildDetailsList(task, { ctx, impact, reasons, movedTexts, timeInfo, preview }));
     panel.appendChild(clip);
     wrap.append(panel);
     inner.appendChild(wrap);
@@ -481,7 +511,10 @@ export function renderCard(task, { focused = false } = {}) {
       const panel = card.querySelector('.details-panel');
       if (panel) panel.classList.toggle('open', open);
       const chev = card.querySelector('.details-chev');
-      if (chev) chev.classList.toggle('open', open);
+      if (chev) {
+        chev.classList.toggle('open', open);
+        chev.setAttribute('aria-expanded', open ? 'true' : 'false');
+      }
     });
   }
   // Choose cards (decisionKind 'choose'): two stacked options — A on top,
@@ -514,6 +547,8 @@ export function renderCard(task, { focused = false } = {}) {
     if (e.kind === 'number') {
       const dec = el('button', 'edit-step', '−');
       const inc = el('button', 'edit-step', '＋');
+      dec.setAttribute('aria-label', '値を減らす');
+      inc.setAttribute('aria-label', '値を増やす');
       dec.type = inc.type = 'button';
       const val = el('span', 'edit-value', String(editedValue(task)));
       const bump = (d) => {
@@ -657,6 +692,20 @@ export function renderCard(task, { focused = false } = {}) {
     approveBtn.addEventListener('pointercancel', cleanup);
     approveBtn.addEventListener('contextmenu', (e) => e.preventDefault());
   }
+  // Two-stage approve made discoverable (I-1004): Shift+→'s automation
+  // approval gets a labeled affordance — same result, one entry point.
+  // Locked cards stay hold-to-confirm only; choose cards pick ↑/↓.
+  let autoBtn = null;
+  if (!chooseMode && riskLevel(task) !== 'locked') {
+    autoBtn = el('button', 'btn ghost sm auto-approve', '＋自動');
+    autoBtn.type = 'button';
+    autoBtn.title = '承認して同種を今後自動化 (Shift+→)';
+    autoBtn.setAttribute('aria-label', '承認して同種を今後自動化');
+    autoBtn.disabled = !!state.paused;
+    autoBtn.addEventListener('click', () => {
+      approve(task, { source: 'web_ui', learnRule: true });
+    });
+  }
   // Snooze menu (I-702): +1h default, 明日朝 option — server-side first,
   // local move-to-tail fallback when the POST fails.
   const snz = el('button', 'btn dim', '後で');
@@ -722,7 +771,7 @@ export function renderCard(task, { focused = false } = {}) {
     input.focus();
   });
 
-  actions.append(reject, snz, dlg, approveBtn);
+  actions.append(reject, snz, dlg, ...(autoBtn ? [autoBtn] : []), approveBtn);
   card.appendChild(actions);
   return card;
 }
@@ -735,7 +784,7 @@ function closePopups() {
 /* 詳細パネル: 理由 / 誰が / 参加者 / 出典 / 金額 / 注意点 (P1: 裏面)。
  * All payload strings render via textContent (NFR-2.1); links are
  * restricted to http(s) so a payload can never become javascript:. */
-export function buildDetailsList(task, { ctx, impact, reasons, movedTexts = [], timeInfo = null }) {
+export function buildDetailsList(task, { ctx, impact, reasons, movedTexts = [], timeInfo = null, preview = null }) {
   const list = el('div', 'details-list');
 
   // horizontal row: icon + label left, value right (short values)
@@ -865,6 +914,26 @@ export function buildDetailsList(task, { ctx, impact, reasons, movedTexts = [], 
       const verb = { approve: '自動承認', reject: '自動却下', escalate: '緊急化' }[task.onExpire] || '自動破棄';
       rowH('schedule', '期限', el('span', '', `${when} — ${verb}`));
     }
+  }
+
+  // I-208: 実行プレビュー (dry-run) — what actually goes out if approved.
+  // Components render through the same safe catalog as the card face
+  // (NFR-2.1); unknown kinds fall back to text tiles.
+  if (preview && Array.isArray(preview.components) && preview.components.length) {
+    const r = el('div', 'drow');
+    const head = el('div', 'drow-head');
+    head.appendChild(el('span', 'drow-ic dvv-ic dvv-ic-bolt'));
+    head.appendChild(el('span', 'drow-label',
+      typeof preview.title === 'string' && preview.title ? preview.title : '実行プレビュー'));
+    r.appendChild(head);
+    const box = el('div', 'preview-box');
+    for (const comp of preview.components) {
+      if (comp && typeof comp === 'object' && typeof comp.component === 'string') {
+        box.appendChild(renderComponent(comp, task));
+      }
+    }
+    r.appendChild(box);
+    list.appendChild(r);
   }
 
   // form editing lives behind one clear affordance at the panel bottom

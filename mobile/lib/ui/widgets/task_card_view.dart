@@ -1,9 +1,11 @@
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 
 import '../../models/task_card.dart';
 import '../colors.dart';
+import '../motion.dart';
 import 'component_renderer.dart';
 
 /// One triage card — calm-iOS minimal: only what the decision needs is
@@ -110,6 +112,7 @@ class _TaskCardViewState extends State<TaskCardView> {
         _movedTexts.isNotEmpty ||
         (impact?.summary != null) ||
         (impact?.costAmount != null) ||
+        (task.preview != null && task.preview!.components.isNotEmpty) ||
         (task.confidence < 0.9 && task.confidenceReasons.isNotEmpty) ||
         task.expiresAt != null;
   }
@@ -118,31 +121,47 @@ class _TaskCardViewState extends State<TaskCardView> {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-      child: GestureDetector(
-        // Double-tap flips the card over (I-107); single tap still opens
-        // the inspect sheet via the InkWell inside [_frontFace].
-        onDoubleTap: () => setState(() => _flipped = !_flipped),
-        child: TweenAnimationBuilder<double>(
-          tween: Tween<double>(begin: 0, end: _flipped ? 1 : 0),
-          duration: const Duration(milliseconds: 380),
-          curve: Curves.easeInOutCubic,
-          builder: (context, t, _) {
-            final angle = t * pi;
-            final back = angle > pi / 2;
-            return Transform(
-              alignment: Alignment.center,
-              transform: Matrix4.identity()
-                ..setEntry(3, 2, 0.0012)
-                ..rotateY(angle),
-              child: back
-                  ? Transform(
-                      alignment: Alignment.center,
-                      transform: Matrix4.identity()..rotateY(pi),
-                      child: _backFace(),
-                    )
-                  : _frontFace(),
-            );
-          },
+      child: Semantics(
+        // I-135/I-1004: screen-reader decision actions mirror the swipes —
+        // the card's content already reads 影響→可逆性→severity (P3), so
+        // these only expose the verbs.
+        customSemanticsActions: {
+          CustomSemanticsAction(label: task.onSwipeRight?.label ?? '承認'):
+              () => widget.onQuickAction(
+                  task.onSwipeRight ??
+                      const ActionBinding(actionName: 'approve')),
+          CustomSemanticsAction(label: task.onSwipeLeft?.label ?? '却下'):
+              () => widget.onQuickAction(
+                  task.onSwipeLeft ??
+                      const ActionBinding(actionName: 'reject')),
+          const CustomSemanticsAction(label: '詳細'): widget.onInspect,
+        },
+        child: GestureDetector(
+          // Double-tap flips the card over (I-107); single tap still opens
+          // the inspect sheet via the InkWell inside [_frontFace].
+          onDoubleTap: () => setState(() => _flipped = !_flipped),
+          child: TweenAnimationBuilder<double>(
+            tween: Tween<double>(begin: 0, end: _flipped ? 1 : 0),
+            duration: animDuration(context, const Duration(milliseconds: 380)),
+            curve: Curves.easeInOutCubic,
+            builder: (context, t, _) {
+              final angle = t * pi;
+              final back = angle > pi / 2;
+              return Transform(
+                alignment: Alignment.center,
+                transform: Matrix4.identity()
+                  ..setEntry(3, 2, 0.0012)
+                  ..rotateY(angle),
+                child: back
+                    ? Transform(
+                        alignment: Alignment.center,
+                        transform: Matrix4.identity()..rotateY(pi),
+                        child: _backFace(),
+                      )
+                    : _frontFace(),
+              );
+            },
+          ),
         ),
       ),
     );
@@ -185,6 +204,17 @@ class _TaskCardViewState extends State<TaskCardView> {
                       _banner(
                         '連続承認検知 — 確認してから承認してください',
                         PopColors.orange,
+                      ),
+                    ],
+                    // I-804: 権限範囲外フラグ — the agent asked for a scope
+                    // it isn't registered for. Banner text+icon, not color.
+                    if (task.scopeViolation) ...[
+                      const SizedBox(height: 8),
+                      _banner(
+                        task.requiredScope != null
+                            ? '⚠ 未登録の権限 — 「${task.requiredScope}」の実行権限がエージェントに登録されていません'
+                            : '⚠ 未登録の権限 — この操作の実行権限がエージェントに登録されていません',
+                        PopColors.scopeWarn,
                       ),
                     ],
                     const SizedBox(height: 8),
@@ -324,6 +354,40 @@ class _TaskCardViewState extends State<TaskCardView> {
                 color: PopColors.text2),
           ),
         ),
+        // I-804: 身元確認. Verified agents get a quiet ✓ (icon+text —
+        // never color alone); unverified speaks up only on critical /
+        // scope-violating cards, silent elsewhere (Zero Noise).
+        if (task.agent.verified == true)
+          const Padding(
+            padding: EdgeInsets.only(right: 8),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.verified_outlined,
+                    size: 12, color: PopColors.verified),
+                SizedBox(width: 3),
+                Text('確認済み',
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: PopColors.verified)),
+              ],
+            ),
+          )
+        else if (task.severity == 'critical' || task.scopeViolation)
+          Container(
+            margin: const EdgeInsets.only(right: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+            decoration: BoxDecoration(
+              border: Border.all(color: PopColors.borderSoft),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: const Text('未確認',
+                style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    color: PopColors.unverified)),
+          ),
         if (widget.delegatedTo != null)
           Container(
             margin: const EdgeInsets.only(right: 8),
@@ -346,7 +410,7 @@ class _TaskCardViewState extends State<TaskCardView> {
             child: Tooltip(
               message: 'エージェントへの返送に失敗しました',
               child: Icon(Icons.warning_amber_rounded,
-                  size: 16, color: PopColors.orange),
+                  size: 16, color: PopColors.syncFailed),
             ),
           ),
         Container(
@@ -425,7 +489,7 @@ class _TaskCardViewState extends State<TaskCardView> {
             fontSize: 12, fontWeight: FontWeight.w800, color: color),
       ),
     );
-    if (!animate) return band;
+    if (!animate || reduceMotion(context)) return band;
     return TweenAnimationBuilder<double>(
       tween: Tween<double>(begin: 0, end: 1),
       duration: const Duration(milliseconds: 600),
@@ -498,7 +562,7 @@ class _TaskCardViewState extends State<TaskCardView> {
                   const Spacer(),
                   AnimatedRotation(
                     turns: open ? 0.5 : 0,
-                    duration: const Duration(milliseconds: 220),
+                    duration: animDuration(context, const Duration(milliseconds: 220)),
                     curve: Curves.easeOutCubic,
                     child: const Icon(Icons.expand_more,
                         size: 18, color: PopColors.blue),
@@ -508,7 +572,7 @@ class _TaskCardViewState extends State<TaskCardView> {
             ),
           ),
           AnimatedSize(
-            duration: const Duration(milliseconds: 260),
+            duration: animDuration(context, const Duration(milliseconds: 260)),
             curve: Curves.easeOutCubic,
             alignment: Alignment.topCenter,
             child: open
@@ -768,6 +832,22 @@ class _DetailsPanel extends StatelessWidget {
                     fontSize: 14,
                     fontFeatures: [FontFeature.tabularFigures()],
                     color: PopColors.text))),
+          // I-208: 実行プレビュー (dry-run) — what goes out if approved,
+          // rendered through the same safe component catalog (NFR-2.1).
+          if (task.preview != null && task.preview!.components.isNotEmpty)
+            _rowWide(Icons.preview_outlined,
+                task.preview!.title ?? '実行プレビュー',
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final c in task.preview!.components)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: ComponentRenderer(component: c),
+                      ),
+                  ],
+                )),
+
           if (form.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 12, bottom: 8),

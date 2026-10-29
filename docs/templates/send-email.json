@@ -1,0 +1,57 @@
+{
+  "type": "createTaskCard",
+  "taskId": "tmpl_send_email",
+  "nonce": "tmpl_nonce_email",
+  "protocolVersion": 1,
+  "agent": {
+    "name": "Communication Agent"
+  },
+  "summary": "メール送信の承認",
+  "severity": "info",
+  "components": [
+    {
+      "id": "root_card",
+      "component": "TriageCard",
+      "children": ["reason", "details"]
+    },
+    {
+      "id": "reason",
+      "component": "Text",
+      "properties": {
+        "text": "提案されたメール文面の送信を承認してください。",
+        "variant": "body"
+      }
+    },
+    {
+      "id": "details",
+      "component": "DiffBox",
+      "properties": {
+        "title": "宛先・件名",
+        "before": "To: customer@example.com",
+        "after": "件名: ご提案の件",
+        "highlight": "info"
+      }
+    }
+  ],
+  "actions": {
+    "onSwipeRight": {
+      "actionName": "approve",
+      "label": "送信する",
+      "payload": {
+        "decision": "SEND"
+      }
+    },
+    "onSwipeLeft": {
+      "actionName": "reject",
+      "label": "送信しない",
+      "payload": {
+        "decision": "CANCEL"
+      }
+    }
+  },
+  "impact": {
+    "summary": "customer@example.com にメールを送信します",
+    "reversible": false,
+    "scope": "外部送信"
+  }
+}
