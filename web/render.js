@@ -6,7 +6,7 @@ import { state, visibleStack, visibleUnits, parkedCount, SNOOZE_OPTIONS } from '
 import { riskLevel, timeAgo, fmtEditDateTime, isChooseTask, snoozeUntilLabel } from './util.js';
 import {
   triage, snooze, selectIndex, approve, choose, bulkApprove, delegate,
-  rowSelection, toggleRow, editedValue,
+  rowSelection, toggleRow, editedValue, askAgent,
 } from './actions.js';
 import { openInspect } from './inspect.js';
 import { renderTray } from './history.js';
@@ -936,6 +936,34 @@ export function buildDetailsList(task, { ctx, impact, reasons, movedTexts = [], 
     list.appendChild(r);
   }
 
+  // I-504: questions already sent to the agent (hub trail). The agent
+  // answers via a card update (I-204) — the trail itself survives it.
+  const asks = Array.isArray(task.asks) ? task.asks : [];
+  if (asks.length > 0) {
+    const r = el('div', 'drow');
+    const head = el('div', 'drow-head');
+    head.appendChild(el('span', 'drow-ic dvv-ic dvv-ic-help'));
+    head.appendChild(el('span', 'drow-label', '質問'));
+    r.appendChild(head);
+    const box = el('div', 'drow-value');
+    for (const a of asks) {
+      if (a && typeof a.question === 'string' && a.question) {
+        box.appendChild(el('div', 'ask-entry', a.question));
+      }
+    }
+    r.appendChild(box);
+    list.appendChild(r);
+  }
+
+  // Ask the agent a question without deciding (I-504).
+  const askBtn = el('button', 'btn details-ask', '? エージェントに質問');
+  askBtn.type = 'button';
+  askBtn.addEventListener('click', () => {
+    const q = window.prompt('エージェントへの質問', '');
+    if (q && q.trim()) askAgent(task, q.trim().slice(0, 1000));
+  });
+  list.appendChild(askBtn);
+
   // form editing lives behind one clear affordance at the panel bottom
   const form = task.actions && Array.isArray(task.actions.inspectForm)
     ? task.actions.inspectForm : [];
@@ -1105,6 +1133,12 @@ export function render() {
     empty.appendChild(el('div', '', state.fleet ? `${state.fleet} に未処理はありません` : 'すべてのタスクが処理済み'));
     empty.appendChild(el('div', '',
       state.fleet ? '絞り込みを解除すると他のエージェントも表示されます' : '新しい要求が届くとここに表示されます'));
+    // I-124: 静かな画面 — never a count leaderboard (I-404); only the
+    // attention the rules handed back (strategy.md).
+    if (Array.isArray(state.rules) && state.rules.length > 0) {
+      empty.appendChild(el('div', 'empty-quiet',
+        `${state.rules.length} 件のルールが確認作業を減らしています`));
+    }
     stackEl.appendChild(empty);
     renderTray();
     renderFleet();

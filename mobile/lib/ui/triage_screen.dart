@@ -237,6 +237,46 @@ class _TriageScreenState extends State<TriageScreen> {
     await context.read<TaskRepository>().delegate(task, name.trim());
   }
 
+  /// Ask the agent a question without deciding (I-504): the card stays
+  /// pending; the question reaches the agent via replyUrl and lands on
+  /// the card's `asks` trail.
+  Future<void> _askQuestion(TaskCard task) async {
+    HapticFeedback.selectionClick();
+    final controller = TextEditingController();
+    final question = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('エージェントに質問'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 1000,
+          decoration: const InputDecoration(
+            labelText: '質問',
+            hintText: 'なぜ16:30?',
+          ),
+          onSubmitted: (_) =>
+              Navigator.of(context).pop(controller.text.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('やめる'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.of(context).pop(controller.text.trim()),
+            child: const Text('送信'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (question == null || question.trim().isEmpty || !mounted) return;
+    HapticFeedback.mediumImpact();
+    await context.read<TaskRepository>().ask(task, question.trim());
+  }
+
   /// Choose card decision (I-111): index 0 = up, index 1 = down.
   void _choose(TaskCard task, int index) {
     if (task.choices.length <= index) return;
@@ -404,7 +444,10 @@ class _TriageScreenState extends State<TriageScreen> {
           ),
           Expanded(
             child: entries.isEmpty
-                ? _EmptyState(reconnecting: !repo.connected.value)
+                ? _EmptyState(
+                    reconnecting: !repo.connected.value,
+                    rulesCount: repo.rulesCount,
+                  )
                 : _overview
                     ? OverviewGrid(
                         tasks: entries.expand((e) => e.members).toList(),
@@ -873,6 +916,15 @@ class _TriageScreenState extends State<TriageScreen> {
               },
             ),
             ListTile(
+              leading: const Icon(Icons.help_outline),
+              title: const Text('エージェントに質問'),
+              subtitle: const Text('カードは保留のまま'),
+              onTap: () {
+                Navigator.of(ctx).pop();
+                _askQuestion(task);
+              },
+            ),
+            ListTile(
               leading: const Icon(Icons.schedule),
               title: const Text('1時間後に再表示'),
               onTap: () {
@@ -1304,8 +1356,9 @@ class _BarAction extends StatelessWidget {
 
 class _EmptyState extends StatelessWidget {
   final bool reconnecting;
+  final int rulesCount;
 
-  const _EmptyState({required this.reconnecting});
+  const _EmptyState({required this.reconnecting, this.rulesCount = 0});
 
   @override
   Widget build(BuildContext context) {
@@ -1328,6 +1381,18 @@ class _EmptyState extends StatelessWidget {
             reconnecting ? 'ハブに再接続中…' : 'エージェントの判断待ちはありません',
             style: TextStyle(fontSize: 13, color: Colors.white.withValues(alpha: 0.4)),
           ),
+          // I-124: 静かな画面 — never a count leaderboard (I-404); only
+          // the attention the rules handed back.
+          if (!reconnecting && rulesCount > 0) ...[
+            const SizedBox(height: 14),
+            Text(
+              '$rulesCount 件のルールが確認作業を減らしています',
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.white.withValues(alpha: 0.3),
+              ),
+            ),
+          ],
         ],
       ),
     );

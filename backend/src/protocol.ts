@@ -239,6 +239,10 @@ export interface TaskCardPayload {
   /** Hub marker on `createTaskCard` re-broadcasts after an agent update
    *  (I-204): clients may show a 「更新されました」 hint. */
   revised?: boolean;
+  /** Questions the human asked through this card (I-504), oldest first.
+   *  Hub-maintained: appended by `action: "ask"` replies; the agent
+   *  answers by updating the card (I-204). Capped at {@link MAX_ASKS}. */
+  asks?: AskEntry[];
   /** I-804: agent-declared scope required to act on this card. */
   requiredScope?: string;
   /** I-804: hub stamps true when the agent is unverified or lacks the
@@ -258,8 +262,10 @@ export interface ActionReply {
   data?: Record<string, unknown>;
   /** `"snooze"` asks the hub to hide the card until `until` instead of
    *  processing it (server-side snooze); `"delegate"` hands the card to
-   *  a colleague (`data.to`) without deciding it (I-501). */
-  action?: "snooze" | "delegate";
+   *  a colleague (`data.to`) without deciding it (I-501); `"ask"`
+   *  forwards `data.question` to the agent via replyUrl and keeps the
+   *  card pending (I-504). */
+  action?: "snooze" | "delegate" | "ask";
   /** ISO 8601 instant the snoozed card resurfaces; required with
    *  `action: "snooze"`, at most 7 days out. */
   until?: string;
@@ -317,6 +323,10 @@ export interface StoredTask {
    *  (I-502). The card stays `pending` until `approvals.length` reaches
    *  `task.requiredApprovals`. */
   approvals?: Approval[];
+  /** Question rounds already asked on this card (I-504). Hub-maintained
+   *  — kept outside `task` so an agent-side `update` (full replacement)
+   *  cannot erase the trail; `present()` merges it back in. */
+  asks?: AskEntry[];
 }
 
 /** One recorded approval on a multi-party card (I-502). */
@@ -324,6 +334,17 @@ export interface Approval {
   source: string;
   at: string;
 }
+
+/** One question round-trip entry (I-504). */
+export interface AskEntry {
+  question: string;
+  at: string;
+  source: string;
+}
+
+/** Max question rounds per card (I-504): beyond this the human must
+ *  decide — a stuck negotiation is worse than a rejected card (P10). */
+export const MAX_ASKS = 3;
 
 /** replyUrl delivery state (I-604/I-801). `url`/`reply` are retained so
  *  retries after the task reaches `processed` can re-send the exact body. */
@@ -368,6 +389,7 @@ export type ActionDecision =
   | { kind: "apply" }
   | { kind: "snooze" }
   | { kind: "delegate" }
+  | { kind: "ask" }
   | { kind: "approve_partial" }
   | { kind: "conflict"; reason: "already_processed" }
   | { kind: "not_found" }
@@ -402,6 +424,9 @@ export function decideAction(
   // Delegation (I-501): hand the card to a colleague without deciding it;
   // the card stays pending (and keeps its nonce).
   if (reply.action === "delegate") return { kind: "delegate" };
+  // Question to the agent (I-504): forwarded via replyUrl; the card
+  // stays pending and keeps its nonce for the eventual decision.
+  if (reply.action === "ask") return { kind: "ask" };
   // Multi-party approval (I-502): an approve on a card that needs more
   // than one distinct approval records a partial until the Nth arrives.
   if (reply.actionName === "approve") {
@@ -981,9 +1006,10 @@ export function validateActionReply(
   if (
     body.action !== undefined &&
     body.action !== "snooze" &&
-    body.action !== "delegate"
+    body.action !== "delegate" &&
+    body.action !== "ask"
   ) {
-    return fail('action must be "snooze" or "delegate" when present');
+    return fail('action must be "snooze", "delegate" or "ask" when present');
   }
   if (body.action === "snooze") {
     const until = body.until;
@@ -1030,6 +1056,31 @@ export function validateActionReply(
             : new Date().toISOString(),
         source: typeof body.source === "string" ? body.source : "delegate",
         action: "delegate",
+        data: body.data as Record<string, unknown>,
+      },
+    };
+  }
+
+  if (body.action === "ask") {
+    const question = isRecord(body.data) ? body.data.question : undefined;
+    if (typeof question !== "string" || question.trim().length === 0) {
+      return fail("ask requires data.question (non-empty string)");
+    }
+    if (question.length > 1000) {
+      return fail("ask question must be at most 1000 characters");
+    }
+    return {
+      ok: true,
+      value: {
+        taskId,
+        nonce,
+        actionName: "ask",
+        timestamp:
+          typeof body.timestamp === "string"
+            ? body.timestamp
+            : new Date().toISOString(),
+        source: typeof body.source === "string" ? body.source : "ask",
+        action: "ask",
         data: body.data as Record<string, unknown>,
       },
     };

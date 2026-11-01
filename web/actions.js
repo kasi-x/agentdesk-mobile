@@ -12,7 +12,7 @@ import {
 } from './store.js';
 import { toast } from './dom.js';
 import { agentName, riskLevel, choiceId, parseEditNumber, parseEditDateTime } from './util.js';
-import { postAction, postUndo, postBulk, postSnooze, postDelegate } from './net.js';
+import { postAction, postUndo, postBulk, postSnooze, postDelegate, postAsk } from './net.js';
 import { render } from './render.js';
 import { recordProcessed } from './history.js';
 import { automationOffer, openAutomationSheet } from './automation.js';
@@ -254,6 +254,26 @@ export async function delegate(task, to) {
     }
   } catch {
     toast('オフライン: 回送できませんでした（表示だけ更新）');
+  }
+}
+
+/**
+ * Ask the agent a question without deciding (I-504): the card stays
+ * pending; the question is appended to `task.asks` (revised broadcast
+ * confirms it) and delivered to replyUrl.
+ */
+export async function askAgent(task, question) {
+  const q = String(question || '').trim();
+  if (!q) return;
+  try {
+    const result = await postAsk(task.taskId, task.nonce, q);
+    if (result === 'ok') {
+      toast('エージェントに質問しました');
+    } else {
+      toast(result === 'not_found' ? 'タスクが見つかりません' : '質問できませんでした（往復上限の可能性）');
+    }
+  } catch {
+    toast('オフライン: 質問できませんでした');
   }
 }
 

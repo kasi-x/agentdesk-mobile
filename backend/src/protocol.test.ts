@@ -181,6 +181,76 @@ describe("validateActionReply", () => {
   });
 });
 
+describe("ask action (I-504)", () => {
+  it("accepts a well-formed ask and keeps nonce", () => {
+    const result = validateActionReply({
+      taskId: "t",
+      nonce: "n",
+      action: "ask",
+      data: { question: "なぜ16:30?" },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.action).toBe("ask");
+    expect(result.value.actionName).toBe("ask");
+  });
+
+  it("rejects ask without a question", () => {
+    expect(
+      validateActionReply({
+        taskId: "t",
+        nonce: "n",
+        action: "ask",
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateActionReply({
+        taskId: "t",
+        nonce: "n",
+        action: "ask",
+        data: { question: "  " },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateActionReply({
+        taskId: "t",
+        nonce: "n",
+        action: "ask",
+        data: { question: "x".repeat(1001) },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("decideAction returns ask for a pending card", () => {
+    expect(
+      decideAction(storedFixture(), {
+        taskId: "task_x",
+        nonce: "tok_1",
+        actionName: "ask",
+        timestamp: "2026-10-04T00:00:00Z",
+        source: "inspect_form",
+        action: "ask",
+        data: { question: "期限はいつ?" },
+      }),
+    ).toEqual({ kind: "ask" });
+  });
+
+  it("ask conflicts on an already-processed card", () => {
+    const processed = storedFixture({ status: "processed", processedAt: 2 });
+    expect(
+      decideAction(processed, {
+        taskId: "task_x",
+        nonce: "tok_1",
+        actionName: "ask",
+        timestamp: "2026-10-04T00:00:00Z",
+        source: "web_ui",
+        action: "ask",
+        data: { question: "q" },
+      }),
+    ).toEqual({ kind: "conflict", reason: "already_processed" });
+  });
+});
+
 describe("decideAction (nonce CAS, FR-3.1/FR-3.3)", () => {
   it("applies a first action on a pending task with a matching nonce", () => {
     expect(

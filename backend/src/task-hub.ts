@@ -1,8 +1,9 @@
 import {
   ActionReply,
   Approval,
-  AttachmentUpload,
+  AskEntry,
   computePriority,
+  AttachmentUpload,
   decideAction,
   decideUndo,
   DeviceRecord,
@@ -12,6 +13,7 @@ import {
   PAIR_TTL_MS,
   PairCode,
   PROTOCOL_VERSION,
+  MAX_ASKS,
   Rule,
   ruleMatches,
   SimulateRequest,
@@ -192,6 +194,7 @@ type TriageOutcome =
       commitAt?: number;
       snoozedUntil?: number;
       delegatedTo?: string;
+      asked?: boolean;
       approvalProgress?: { count: number; required: number };
     }
   | { ok: false; error: string };
@@ -610,6 +613,39 @@ export class TaskHub {
       return { ok: true, delegatedTo: to };
     }
 
+    // Ask (I-504): the question is appended to the card's ask trail and
+    // forwarded to replyUrl now; the card stays pending with its nonce
+    // until a real decision arrives. `update`/`withdraw` continue to
+    // work and keep the trail (it lives on StoredTask, not the payload).
+    if (decision.kind === "ask") {
+      const question =
+        reply.data === undefined ? undefined : reply.data.question;
+      if (typeof question !== "string" || question.trim().length === 0) {
+        return { ok: false, error: "invalid_question" };
+      }
+      const asks = stored.asks ?? [];
+      if (asks.length >= MAX_ASKS) {
+        return { ok: false, error: "ask_limit" };
+      }
+      const entry: AskEntry = {
+        question,
+        at: reply.timestamp,
+        source: reply.source,
+      };
+      const updated: StoredTask = { ...stored, asks: [...asks, entry] };
+      await this.state.storage.put(key, updated);
+      await this.broadcast("createTaskCard", {
+        ...this.present(updated, Date.now()),
+        revised: true,
+      });
+      if (stored.task.replyUrl) {
+        this.state.waitUntil(
+          this.attemptDelivery(key, stored.task.replyUrl, reply),
+        );
+      }
+      return { ok: true, asked: true };
+    }
+
     // Multi-party approval (I-502): the Nth approval is not in yet, so
     // the card stays pending. Record this one, rotate the nonce so the
     // same device cannot approve twice, and broadcast progress.
@@ -924,6 +960,9 @@ export class TaskHub {
   private present(stored: StoredTask, now: number): TaskCardPayload {
     return {
       ...stored.task,
+      // Hub-owned trail (I-504): survives agent-side `update`
+      // replacements, which carry a fresh payload without asks.
+      ...(stored.asks?.length ? { asks: stored.asks } : {}),
       priority: computePriority(stored.task, stored.createdAt, now),
     };
   }

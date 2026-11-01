@@ -2737,3 +2737,9 @@ body {
   outline: none;
   box-shadow: 0 0 0 2px var(--blue);
 }
+
+/* I-124 quiet empty state — the attention the rules handed back,
+ * dimmer than the main line; no counts, no leaderboard (I-404). */
+.empty-quiet { margin-top: 8px; font-size: 12px; color: var(--text-3); }
+.ask-entry { font-size: 13px; color: var(--text); margin-bottom: 4px; }
+.details-ask { margin-top: 8px; }

@@ -13,6 +13,7 @@ class FakeHubApiV2 extends FakeHubApiBase implements HubApiV2 {
   final List<Map<String, String>> snoozes = <Map<String, String>>[];
   final List<Map<String, String>> delegates = <Map<String, String>>[];
   final List<List<TriageActionReply>> bulks = <List<TriageActionReply>>[];
+  final List<Map<String, String>> asks = <Map<String, String>>[];
   bool offlineBulk = false;
 
   @override
@@ -37,6 +38,17 @@ class FakeHubApiV2 extends FakeHubApiBase implements HubApiV2 {
     return ActionSendResult.sent;
   }
 
+
+  @override
+  Future<ActionSendResult> ask({
+    required String taskId,
+    required String nonce,
+    required String question,
+  }) async {
+    if (offline) return ActionSendResult.networkError;
+    asks.add(<String, String>{'taskId': taskId, 'question': question});
+    return ActionSendResult.sent;
+  }
   @override
   Future<BulkResult> bulk(List<TriageActionReply> actions) async {
     if (offlineBulk) return const BulkResult(networkError: true);

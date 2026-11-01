@@ -272,6 +272,14 @@ abstract class HubApiV2 {
     required String to,
   });
 
+  /// `POST /actions {action:"ask", data:{question}}` — forwards the
+  /// question to the agent's replyUrl; the card stays pending (I-504).
+  Future<ActionSendResult> ask({
+    required String taskId,
+    required String nonce,
+    required String question,
+  });
+
   /// `POST /actions/bulk` — each item CASed independently (I-201).
   Future<BulkResult> bulk(List<TriageActionReply> actions);
 }
@@ -394,6 +402,36 @@ class HttpHubApi implements HubApi, HubApiV2, HubRulesApi, HubGuardrailsApi {
               'action': 'delegate',
               'data': <String, dynamic>{'to': to},
               'source': ActionSource.delegate,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (res.statusCode == 200) return ActionSendResult.sent;
+      if (res.statusCode == 409) return ActionSendResult.conflict;
+      return ActionSendResult.rejected;
+    } on TimeoutException {
+      return ActionSendResult.networkError;
+    } on http.ClientException {
+      return ActionSendResult.networkError;
+    }
+  }
+
+  @override
+  Future<ActionSendResult> ask({
+    required String taskId,
+    required String nonce,
+    required String question,
+  }) async {
+    try {
+      final res = await _client
+          .post(
+            _uri('/actions'),
+            headers: _headers,
+            body: jsonEncode(<String, dynamic>{
+              'taskId': taskId,
+              'nonce': nonce,
+              'action': 'ask',
+              'data': <String, dynamic>{'question': question},
+              'source': ActionSource.ask,
             }),
           )
           .timeout(const Duration(seconds: 10));

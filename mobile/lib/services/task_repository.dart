@@ -88,6 +88,10 @@ class TaskRepository extends ChangeNotifier {
   final Set<String> _deliveryFailed = <String>{};
   bool _paused = false;
   DateTime? _pauseUntil;
+  /// Auto-approval rules reported by the snapshot (I-602). Only the
+  /// count is kept — the empty state shows 「N件のルールが確認作業を
+  /// 減らしています」(I-124); the guardrails screen owns full rules.
+  int _rulesCount = 0;
 
   /// Finished triage decisions (I-120/I-512): newest first, capped at
   /// [_processedLimit]. Recorded on every local triage and every remote
@@ -233,6 +237,7 @@ class TaskRepository extends ChangeNotifier {
   String? delegatedFor(String taskId) => _delegatedTo[taskId];
   bool isDeliveryFailed(String taskId) => _deliveryFailed.contains(taskId);
   bool isRevised(String taskId) => _revisedIds.contains(taskId);
+  int get rulesCount => _rulesCount;
 
   List<String> rowSelection(String taskId) =>
       List.unmodifiable(_rowSelections[taskId] ?? const <String>[]);
@@ -713,6 +718,36 @@ class TaskRepository extends ChangeNotifier {
     }
   }
 
+  /// I-504: send a question to the agent without deciding the card.
+  /// The question lands on the card's `asks` trail (revised broadcast)
+  /// and reaches the agent via replyUrl; the card stays pending.
+  Future<void> ask(TaskCard task, String question) async {
+    final q = question.trim();
+    if (q.isEmpty) return;
+    final v2 = _v2;
+    if (v2 == null) {
+      _toast('質問はハブの対応が必要です');
+      return;
+    }
+    final result = await v2.ask(
+        taskId: task.taskId, nonce: task.nonce, question: q);
+    switch (result) {
+      case ActionSendResult.sent:
+        _toast('エージェントに質問しました');
+        break;
+      case ActionSendResult.conflict:
+        _toast('処理済みのタスクです（別デバイスで承認済み）');
+        onConflict?.call();
+        break;
+      case ActionSendResult.rejected:
+        _toast('質問できませんでした（往復上限の可能性）');
+        break;
+      case ActionSendResult.networkError:
+        _toast('オフライン: 質問できませんでした');
+        break;
+    }
+  }
+
   void setRowSelection(String taskId, List<String> ids) {
     if (ids.isEmpty) {
       _rowSelections.remove(taskId);
@@ -968,6 +1003,7 @@ class TaskRepository extends ChangeNotifier {
       paused: payload['paused'] is bool ? payload['paused'] as bool : null,
       approvalProgress: progress,
       delivery: delivery,
+      rules: payload['rules'] is List ? payload['rules'] as List : const <dynamic>[],
     );
   }
 
@@ -1012,7 +1048,9 @@ class TaskRepository extends ChangeNotifier {
     bool? paused,
     Map<String, int> approvalProgress = const <String, int>{},
     List<Map<String, dynamic>> delivery = const <Map<String, dynamic>>[],
+    List<dynamic> rules = const <dynamic>[],
   }) {
+    _rulesCount = rules.length;
     if (paused != null) _paused = paused;
     _serverSnoozed
       ..clear()

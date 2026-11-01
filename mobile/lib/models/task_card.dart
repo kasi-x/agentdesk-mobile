@@ -294,6 +294,30 @@ class TaskCardPreview {
   }
 }
 
+/// One question the human asked through this card (I-504).
+class AskEntry {
+  final String question;
+  final String at;
+  final String source;
+
+  const AskEntry({
+    required this.question,
+    required this.at,
+    required this.source,
+  });
+
+  factory AskEntry.fromJson(dynamic raw) {
+    if (raw is! Map) {
+      return const AskEntry(question: '', at: '', source: '');
+    }
+    return AskEntry(
+      question: raw['question'] is String ? raw['question'] as String : '',
+      at: raw['at'] is String ? raw['at'] as String : '',
+      source: raw['source'] is String ? raw['source'] as String : '',
+    );
+  }
+}
+
 class TaskCard {
   final String taskId;
   final String nonce;
@@ -355,6 +379,9 @@ class TaskCard {
   final bool scopeViolation;
   /// I-208: dry-run preview.
   final TaskCardPreview? preview;
+  /// I-504: question rounds asked on this card (hub-managed; survives
+  /// agent `update` replacements). Oldest first, capped server-side.
+  final List<AskEntry> asks;
 
   const TaskCard({
     required this.taskId,
@@ -390,6 +417,7 @@ class TaskCard {
     this.requiredScope,
     this.scopeViolation = false,
     this.preview,
+    this.asks = const <AskEntry>[],
   });
 
   factory TaskCard.fromJson(dynamic raw) {
@@ -487,6 +515,12 @@ class TaskCard {
         if (pr.components.isNotEmpty || pr.title != null) return pr;
         return null;
       }() : null,
+      asks: raw['asks'] is List
+          ? (raw['asks'] as List)
+              .map(AskEntry.fromJson)
+              .where((a) => a.question.isNotEmpty)
+              .toList()
+          : const <AskEntry>[],
     );
   }
 

@@ -87,4 +87,5 @@ abstract final class ActionSource {
   static const String autoRule = 'auto_rule';
   /// Operator fleet pause (I-403).
   static const String pause = 'pause';
+  static const String ask = 'ask';
 }

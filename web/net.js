@@ -61,6 +61,12 @@ export async function postDelegate(taskId, nonce, to) {
   return postAction({ taskId, nonce, action: 'delegate', data: { to }, source: 'web_ui' });
 }
 
+/** Ask the agent a question (I-504) — the card stays pending; the
+ *  question lands on the card's `asks` trail and reaches replyUrl. */
+export async function postAsk(taskId, nonce, question) {
+  return postAction({ taskId, nonce, action: 'ask', data: { question }, source: 'web_ui' });
+}
+
 /** POST an undo request. Returns 'ok' | 'too_late' | 'not_found' | throws. */
 export async function postUndo(taskId, nonce) {
   const res = await fetch(apiUrl('/api/v1/actions/undo'), {

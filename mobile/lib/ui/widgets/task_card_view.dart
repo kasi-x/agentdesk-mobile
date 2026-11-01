@@ -114,7 +114,8 @@ class _TaskCardViewState extends State<TaskCardView> {
         (impact?.costAmount != null) ||
         (task.preview != null && task.preview!.components.isNotEmpty) ||
         (task.confidence < 0.9 && task.confidenceReasons.isNotEmpty) ||
-        task.expiresAt != null;
+        task.expiresAt != null ||
+        task.asks.isNotEmpty;
   }
 
   @override
@@ -844,6 +845,22 @@ class _DetailsPanel extends StatelessWidget {
                       Padding(
                         padding: const EdgeInsets.only(bottom: 6),
                         child: ComponentRenderer(component: c),
+                      ),
+                  ],
+                )),
+          // I-504: questions already sent to the agent (hub trail —
+          // the agent's answer arrives as a card update, I-204).
+          if (task.asks.isNotEmpty)
+            _rowWide(Icons.help_outline, '質問',
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final a in task.asks)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Text(a.question,
+                            style: const TextStyle(
+                                fontSize: 13, color: PopColors.text)),
                       ),
                   ],
                 )),

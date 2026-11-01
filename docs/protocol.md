@@ -303,6 +303,25 @@ taskId は差し替え）。スヌーズ中は `expiresAt` の期限判定を行
 `200 {ok, taskId, delegatedTo}`。`bulk` の項目としても送れる
 （`{taskId, nonce, action: "delegate", data: {to}}`）。
 
+### エージェントへの質問 (I-504)
+
+カードを決定せずエージェントへ問い合わせる。nonce は消費しない:
+
+```json
+{ "taskId": "task_98234", "nonce": "tok_sec_abc123", "action": "ask", "data": { "question": "なぜ16:30?" } }
+```
+
+`data.question` は必須の非空文字列（最大1000文字、なければ `400`）。
+ハブは `asks: [{question, at, source}]` をカードに追記（先頭から古い順、
+`createTaskCard revised: true` で全端末に配信）し、replyUrl へ即座に
+返信として届ける（`X-AgentDesk-Event: triage_reply`）。カードは
+`pending` のまま。応答は `200 {ok, taskId, asked: true}`。
+
+エージェントの返答は `PUT /api/v1/tasks/{id}` のカード更新 (I-204) で
+届く — `asks` はハブ側で管理するので、エージェントの更新が消すことは
+ない。1カードあたり **最大3往復** (`ask_limit` → `409`)。上限を超えたら
+人間が決定する — 行き詰まった交渉は却下の方がまし (P10)。
+
 ### 二人承認 (I-502)
 
 `requiredApprovals: N`（N ≥ 1、既定 1）のカードは N 人の承認が揃うまで
