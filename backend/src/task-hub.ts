@@ -4,6 +4,7 @@ import {
   AskEntry,
   computePriority,
   AttachmentUpload,
+  detectPromptInjection,
   decideAction,
   decideUndo,
   DeviceRecord,
@@ -413,6 +414,26 @@ export class TaskHub {
       if (!verified || !Array.isArray(scopes) || !scopes.includes(task.requiredScope)) {
         (task as any).scopeViolation = true;
       }
+    }
+    // I-810: prompt injection check across summary and components
+    let injection = detectPromptInjection(task.summary);
+    if (!injection && Array.isArray(task.components)) {
+      for (const comp of task.components) {
+        if (!comp || typeof comp !== "object") continue;
+        const p = (comp as any).properties;
+        if (!p || typeof p !== "object") continue;
+        if (typeof p.text === "string" && detectPromptInjection(p.text)) {
+          injection = true;
+          break;
+        }
+      }
+    }
+    if (injection) {
+      task = {
+        ...task,
+        injectionWarning: true,
+        severity: task.severity === "info" ? "warning" : task.severity,
+      } as TaskCardPayload;
     }
     const stored: StoredTask = {
       task,

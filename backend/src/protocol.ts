@@ -251,6 +251,9 @@ export interface TaskCardPayload {
   /** I-208: dry-run preview rendered in the details/inspect view as a
    *  実行プレビュー section. Malformed preview/components are dropped. */
   preview?: { title?: string; components: CardComponent[] };
+  /** I-810: hub stamps true when imperative prompt injection cues are
+   *  detected in external or summary text; clients warn and severity is bumped. */
+  injectionWarning?: boolean;
 }
 
 export interface ActionReply {
@@ -564,6 +567,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function fail<T>(error: string): ValidationResult<T> {
   return { ok: false, error };
+}
+
+/**
+ * I-810: detect imperative prompt injection signatures in untrusted
+ * text (external-origin text components, caption narratives, or summary).
+ * Matches common adversarial patterns in English and Japanese:
+ * e.g. "ignore previous instructions", "system prompt", "直ちに承認せよ", etc.
+ */
+export function detectPromptInjection(text: string): boolean {
+  if (!text || typeof text !== "string") return false;
+  const t = text.toLowerCase();
+  const enPatterns = [
+    /ignore\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)/i,
+    /system\s+prompt\s*:/i,
+    /override\s+(all\s+)?(guardrails|rules|policy)/i,
+    /you\s+must\s+(approve|accept|bypass)/i,
+    /disregard\s+(all\s+)?(previous|prior|above)/i,
+    /new\s+system\s+instruction/i,
+  ];
+  const jaPatterns = [
+    /(以前|前|過去)の指示を(すべて)?無視/u,
+    /プロンプトを(すべて)?無視/u,
+    /ガードレールを(無効化|解除|バイパス)/u,
+    /(直ちに|今すぐ|必ず)(承認|許可)せよ/u,
+    /システム指示\s*[:：]/u,
+    /この(返金|操作|要求)を(必ず|無条件で)?承認/u,
+  ];
+  return enPatterns.some((re) => re.test(t)) || jaPatterns.some((re) => re.test(text));
 }
 
 /**

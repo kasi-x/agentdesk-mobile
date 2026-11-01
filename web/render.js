@@ -2,7 +2,7 @@
  * Every payload string reaches the DOM only via textContent/createElement
  * (NFR-2.1) — never innerHTML, never eval. */
 import { el, clear } from './dom.js';
-import { state, visibleStack, visibleUnits, parkedCount, SNOOZE_OPTIONS } from './store.js';
+import { state, visibleStack, visibleUnits, parkedCount, SNOOZE_OPTIONS, isInterlocked } from './store.js';
 import { riskLevel, timeAgo, fmtEditDateTime, isChooseTask, snoozeUntilLabel } from './util.js';
 import {
   triage, snooze, selectIndex, approve, choose, bulkApprove, delegate,
@@ -455,6 +455,12 @@ export function renderCard(task, { focused = false } = {}) {
       `⚠ 未登録の権限 — このエージェントは ${req} の実行権限を登録していません`));
   }
 
+  // I-810: プロンプトインジェクションの疑い警告
+  if (task.injectionWarning === true) {
+    inner.appendChild(el('div', 'injection-warn',
+      '⚠ プロンプトインジェクションの疑い — 外部テキストに指示構文を検出しました'));
+  }
+
   // Headline: the summary. The 承認すると… result statement lives in
   // 詳細 (結果 row) — the front stays as short as possible.
   inner.appendChild(el('div', 'summary', task.summary || ''));
@@ -617,6 +623,12 @@ export function renderCard(task, { focused = false } = {}) {
     approveBtn.disabled = true;
     approveBtn.classList.add('paused');
     approveBtn.title = '緊急停止中 — 承認は無効です';
+  }
+  // I-1003: 承認の「間」 — 500ms interlock on critical cards (P4).
+  if (isInterlocked(task)) {
+    approveBtn.disabled = true;
+    approveBtn.classList.add('interlocked');
+    approveBtn.textContent = '確認中…';
   }
 
   // Reject reason chips (I-118): when the agent supplied candidates,
@@ -1146,6 +1158,18 @@ export function render() {
   }
 
   const [top, ...rest] = units;
+  const topKey = top.type === 'group' ? top.key : top.task.taskId;
+  if (state.topKey !== topKey) {
+    state.topKey = topKey;
+    state.topSince = Date.now();
+    clearTimeout(state.topTimer);
+    const topTask = top.type === 'card' ? top.task : null;
+    if (topTask && isInterlocked(topTask)) {
+      state.topTimer = setTimeout(() => {
+        render();
+      }, 510);
+    }
+  }
   stackEl.appendChild(renderUnit(top, state.kbActive && state.selected === 0));
 
   if (rest.length > 0) {

@@ -138,7 +138,7 @@ export default {
             headers: { "content-type": "application/json" },
           },
         );
-        return cors(res, request, env);
+        return cors(rebuilt(res), request, env);
       }
 
       if (url.pathname === "/api/v1/actions" && request.method === "POST") {

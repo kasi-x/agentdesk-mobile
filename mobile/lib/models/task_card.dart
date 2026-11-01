@@ -382,6 +382,8 @@ class TaskCard {
   /// I-504: question rounds asked on this card (hub-managed; survives
   /// agent `update` replacements). Oldest first, capped server-side.
   final List<AskEntry> asks;
+  /// I-810: hub-stamped prompt injection warning flag.
+  final bool injectionWarning;
 
   const TaskCard({
     required this.taskId,
@@ -418,6 +420,7 @@ class TaskCard {
     this.scopeViolation = false,
     this.preview,
     this.asks = const <AskEntry>[],
+    this.injectionWarning = false,
   });
 
   factory TaskCard.fromJson(dynamic raw) {
@@ -521,6 +524,7 @@ class TaskCard {
               .where((a) => a.question.isNotEmpty)
               .toList()
           : const <AskEntry>[],
+      injectionWarning: raw['injectionWarning'] == true,
     );
   }
 

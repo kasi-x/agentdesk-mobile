@@ -9,6 +9,7 @@ import {
   visibleUnits,
   SNOOZE_OPTIONS,
   applyOrder,
+  isInterlocked,
 } from './store.js';
 import { toast } from './dom.js';
 import { agentName, riskLevel, choiceId, parseEditNumber, parseEditDateTime } from './util.js';
@@ -140,6 +141,10 @@ export function approvalData(task, extra) {
  * `learnRule: true` (two-stage, I-1003) rides top-level on the action POST.
  * Returns false when the rubber-stamp gate armed instead of sending. */
 export function approve(task, { source = 'web_ui', extra = null, learnRule = false } = {}) {
+  if (isInterlocked(task)) {
+    toast('確認中… (0.5秒の確認時間)');
+    return false;
+  }
   if (!passGate(task)) {
     toast('もう一度で承認 (連続承認検知中)');
     return false;

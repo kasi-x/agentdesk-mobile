@@ -5,7 +5,7 @@
  * - Never caches POST; never intercepts /api/v1/stream (EventSource must
  *   stream straight through) — those fetch through untouched.
  */
-const VERSION = 'v1';
+const VERSION = 'v2';
 const SHELL_CACHE = `agentdesk-shell-${VERSION}`;
 const API_CACHE = `agentdesk-api-${VERSION}`;
 const SHELL = [
@@ -30,6 +30,10 @@ const SHELL = [
   '/qr.js',
   '/capture.js',
   '/guardrails.js',
+  '/automation.js',
+  '/playground.html',
+  '/playground.js',
+  '/playground.css',
 ];
 
 self.addEventListener('install', (event) => {

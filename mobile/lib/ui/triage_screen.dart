@@ -74,7 +74,7 @@ class _TriageScreenState extends State<TriageScreen> {
   bool _stampArmed = false;
   String? _topKey;
   DateTime _topSince = DateTime.now();
-
+  Timer? _interlockTimer;
   @override
   void initState() {
     super.initState();
@@ -94,6 +94,7 @@ class _TriageScreenState extends State<TriageScreen> {
   void dispose() {
     _ticker?.cancel();
     _dropTimer?.cancel();
+    _interlockTimer?.cancel();
     super.dispose();
   }
 
@@ -360,7 +361,9 @@ class _TriageScreenState extends State<TriageScreen> {
       bindings: <ShortcutActivator, VoidCallback>{
         const SingleActivator(LogicalKeyboardKey.arrowRight): () {
           final top = _topDecideTask(entries);
-          if (top != null) _controller.swipe(CardSwiperDirection.right);
+          if (top != null && !_isInterlocked(top)) {
+            _controller.swipe(CardSwiperDirection.right);
+          }
         },
         const SingleActivator(LogicalKeyboardKey.arrowLeft): () {
           final top = _topDecideTask(entries);
@@ -468,13 +471,32 @@ class _TriageScreenState extends State<TriageScreen> {
   }
 
   /// Remembers when the current top entry arrived so rubber-stamp
-  /// timing (I-401) measures display age, not card age.
+  /// timing (I-401) and I-1003 interlock measure display age.
   void _trackTop(List<StackEntry> entries) {
     final key = entries.isEmpty ? null : entries.first.key;
     if (key != _topKey) {
       _topKey = key;
       _topSince = DateTime.now();
+      _interlockTimer?.cancel();
+      final top = entries.isNotEmpty && !entries.first.isBundle
+          ? entries.first.single
+          : null;
+      if (top != null &&
+          (top.severity == 'critical' || riskLevel(top) == RiskLevel.locked)) {
+        // I-1003: 承認の「間」 — 500ms interlock on critical/locked cards (P4).
+        _interlockTimer = Timer(const Duration(milliseconds: 500), () {
+          if (mounted) setState(() {});
+        });
+      }
     }
+  }
+
+  bool _isInterlocked(TaskCard? card) {
+    if (card == null) return false;
+    final hot = card.severity == 'critical' || riskLevel(card) == RiskLevel.locked;
+    if (!hot) return false;
+    return DateTime.now().difference(_topSince) <
+        const Duration(milliseconds: 500);
   }
 
   /// Top card when the keyboard can act on it (single non-choose card).
@@ -589,7 +611,7 @@ class _TriageScreenState extends State<TriageScreen> {
                 controller: _controller,
                 cardsCount: entries.length,
                 isLoop: false,
-                isDisabled: _dropMode,
+                isDisabled: _dropMode || _isInterlocked(top.isBundle ? null : top.single),
                 numberOfCardsDisplayed:
                     entries.length >= 3 ? 3 : entries.length,
                 threshold: thresholdPx,
@@ -833,6 +855,12 @@ class _TriageScreenState extends State<TriageScreen> {
                         TextStyle(fontSize: 10, color: Colors.white38),
                   ),
                 ],
+              )
+            else if (_isInterlocked(top.single))
+              const _BarAction(
+                icon: Icons.hourglass_top_rounded,
+                label: '確認中…',
+                onTap: null,
               )
             else
               _BarAction(

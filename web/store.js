@@ -87,8 +87,10 @@ export const state = {
   stampArm: null, // taskId armed by a first click (2-click gate, I-401)
   rowSelections: new Map(), // taskId → Map(componentId → Set(rowId)) (row-select)
   edits: new Map(), // taskId → edited value for the `editable` hint (I-114)
+  topKey: null,
+  topSince: 0,
+  topTimer: null,
 };
-
 export function persistQueue() {
   localStorage.setItem(LS_QUEUE, JSON.stringify(state.queue));
 }
@@ -130,6 +132,17 @@ export function applyOrder() {
   }
   const now = Date.now();
   state.stack = _sortTasks(non, state.order, now).concat(_sortTasks(snoozed, state.order, now));
+}
+
+/**
+ * I-1003: 承認の「間」 (P4) — high-risk/critical cards have a 500ms
+ * interlock window upon first display before approval is accepted.
+ */
+export function isInterlocked(task) {
+  if (!task) return false;
+  const isHot = task.severity === 'critical' || (task.impact && task.impact.reversible === false);
+  if (!isHot) return false;
+  return Date.now() - (state.topSince || 0) < 500;
 }
 
 export const ORDER_LABELS = { urgent: '緊急順', newest: '新しい順', agent: 'エージェント順' };

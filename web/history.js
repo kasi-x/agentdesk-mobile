@@ -5,7 +5,7 @@
  * Entries persist in localStorage (cap 200) and group per local day.
  */
 import { state, persistHistory, HISTORY_LIMIT } from './store.js';
-import { el, clear } from './dom.js';
+import { el, clear, toast } from './dom.js';
 import { timeAgo } from './util.js';
 
 const SOURCE_LABEL = {
@@ -95,6 +95,7 @@ function entryRow(entry) {
   const m = metaFor(entry);
   const row = el('button', 'hist-row');
   row.type = 'button';
+  row.addEventListener('click', () => showReceipt(entry));
   row.appendChild(el('span', `hist-ic ${m.cls}`, m.glyph));
   const body = el('span', 'hist-body');
   body.appendChild(el('span', 'hist-summary', entry.summary || entry.action));
@@ -167,11 +168,25 @@ export function renderHistory() {
 
   const head = el('div', 'sheet-head');
   head.appendChild(el('div', 'sheet-title', '処理履歴'));
+  const headActions = el('div', 'sheet-head-actions');
+  const exportBtn = el('button', 'btn ghost sm', 'エクスポート');
+  exportBtn.type = 'button';
+  exportBtn.addEventListener('click', () => {
+    const json = JSON.stringify(state.history, null, 2);
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(json).then(() => {
+        toast(`全履歴 (${state.history.length}件) をクリップボードにコピーしました`);
+      });
+    } else {
+      toast('クリップボードが利用できません');
+    }
+  });
+  headActions.appendChild(exportBtn);
   const close = el('button', 'btn dim sm', '閉じる');
   close.type = 'button';
   close.addEventListener('click', closeHistory);
-  head.appendChild(close);
-  panel.appendChild(head);
+  headActions.appendChild(close);
+  head.appendChild(headActions);
 
   if (state.history.length === 0) {
     panel.appendChild(el('div', 'hist-empty', 'まだ処理したカードはありません'));
@@ -189,4 +204,82 @@ export function renderHistory() {
     list.appendChild(entryRow(entry));
   }
   panel.appendChild(list);
+}
+
+export function closeReceipt() {
+  const modal = document.getElementById('receipt-modal');
+  const backdrop = document.getElementById('receipt-backdrop');
+  if (modal) modal.hidden = true;
+  if (backdrop) backdrop.hidden = true;
+}
+
+export function showReceipt(entry) {
+  const modal = document.getElementById('receipt-modal');
+  const backdrop = document.getElementById('receipt-backdrop');
+  if (!modal || !backdrop) return;
+  clear(modal);
+  backdrop.hidden = false;
+  modal.hidden = false;
+  backdrop.onclick = closeReceipt;
+
+  const m = metaFor(entry);
+  const head = el('div', 'sheet-head');
+  head.appendChild(el('div', 'sheet-title', '結果レシート'));
+  const close = el('button', 'btn dim sm', '閉じる');
+  close.type = 'button';
+  close.addEventListener('click', closeReceipt);
+  head.appendChild(close);
+  modal.appendChild(head);
+
+  const body = el('div', 'receipt-body');
+  const badgeRow = el('div', 'receipt-badge-row');
+  const badge = el('span', `receipt-badge ${m.cls}`);
+  badge.textContent = `${m.glyph} ${SOURCE_LABEL[entry.action] || entry.action}`;
+  badgeRow.appendChild(badge);
+  badgeRow.appendChild(el('span', 'receipt-source', SOURCE_LABEL[entry.source] || entry.source));
+  body.appendChild(badgeRow);
+
+  body.appendChild(el('div', 'receipt-summary', entry.summary || '(no summary)'));
+
+  const details = el('div', 'receipt-details');
+  const addRow = (label, val, copyable = false) => {
+    const r = el('div', 'receipt-row');
+    r.appendChild(el('span', 'receipt-label', label));
+    const v = el('span', 'receipt-val', val);
+    r.appendChild(v);
+    if (copyable) {
+      const c = el('button', 'btn ghost sm receipt-copy', 'コピー');
+      c.type = 'button';
+      c.addEventListener('click', () => {
+        if (navigator.clipboard) {
+          navigator.clipboard.writeText(val).then(() => toast(`${label} をコピーしました`));
+        }
+      });
+      r.appendChild(c);
+    }
+    details.appendChild(r);
+  };
+
+  addRow('エージェント', entry.agent || 'Agent');
+  const d = new Date(entry.at);
+  addRow('日時', Number.isNaN(d.getTime()) ? entry.at : d.toLocaleString('ja-JP'));
+  addRow('タスクID', entry.taskId, true);
+  body.appendChild(details);
+
+  const actions = el('div', 'receipt-actions');
+  const copyAudit = el('button', 'btn ghost sm', '監査JSONをコピー');
+  copyAudit.type = 'button';
+  copyAudit.addEventListener('click', () => {
+    const json = JSON.stringify(entry, null, 2);
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(json).then(() => {
+        toast('レシート (JSON) をコピーしました');
+        closeReceipt();
+      });
+    }
+  });
+  actions.appendChild(copyAudit);
+  body.appendChild(actions);
+
+  modal.appendChild(body);
 }

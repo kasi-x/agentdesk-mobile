@@ -198,6 +198,7 @@ Field notes:
 | `requiredScope` | opt | agent-declared scope required (I-804). See above. |
 | `scopeViolation` | hub adds | `true` if unverified or missing required scope (I-804); card still enqueues. |
 | `preview` | opt | dry-run preview `{title?, components:[...]}` rendered in details/inspect as 実行プレビュー (I-208). Malformed preview/components dropped. |
+| `injectionWarning` | hub adds | `true` when imperative prompt injection cues are detected in external or summary text (I-810); severity is bumped to warning minimum, clients display a warning banner |
 
 ## Component catalog
 

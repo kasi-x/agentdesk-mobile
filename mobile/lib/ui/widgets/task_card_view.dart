@@ -218,6 +218,14 @@ class _TaskCardViewState extends State<TaskCardView> {
                         PopColors.scopeWarn,
                       ),
                     ],
+                    // I-810: プロンプトインジェクションの疑い警告
+                    if (task.injectionWarning) ...[
+                      const SizedBox(height: 8),
+                      _banner(
+                        '⚠ プロンプトインジェクションの疑い — 外部テキストに指示構文を検出しました',
+                        PopColors.red,
+                      ),
+                    ],
                     const SizedBox(height: 8),
                     Text(
                       task.summary,
